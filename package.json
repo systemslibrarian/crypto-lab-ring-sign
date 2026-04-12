@@ -14,5 +14,8 @@
     "gh-pages": "^6.3.0",
     "typescript": "~6.0.2",
     "vite": "^8.0.4"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.2.0"
   }
 }
