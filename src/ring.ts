@@ -203,6 +203,9 @@ export const verifyLsag = async (message: string, signature: LsagSignature): Pro
   }
 
   const keyImage = pointFromHex(signature.keyImageHex);
+  if (keyImage.equals(ed25519.Point.ZERO)) {
+    return false;
+  }
   const c0 = hexToScalar(signature.c0Hex);
   const pubPoints = signature.ring.map((m) => pointFromHex(m.publicKeyHex));
   const hpPoints = await Promise.all(pubPoints.map((p) => hashPoint(p)));
@@ -215,6 +218,26 @@ export const verifyLsag = async (message: string, signature: LsagSignature): Pro
     c = await challengeFor(message, keyImage, l, r);
   }
   return c === c0;
+};
+
+export const reconstructChallengeChain = async (
+  message: string,
+  signature: LsagSignature
+): Promise<string[]> => {
+  const keyImage = pointFromHex(signature.keyImageHex);
+  const pubPoints = signature.ring.map((m) => pointFromHex(m.publicKeyHex));
+  const hpPoints = await Promise.all(pubPoints.map((p) => hashPoint(p)));
+  const chain: string[] = [];
+  let c = hexToScalar(signature.c0Hex);
+  chain.push(scalarToHex(c));
+  for (let i = 0; i < pubPoints.length; i += 1) {
+    const s = hexToScalar(signature.responsesHex[i]);
+    const l = BASE.multiply(s).add(pubPoints[i].multiply(c));
+    const r = hpPoints[i].multiply(s).add(keyImage.multiply(c));
+    c = await challengeFor(message, keyImage, l, r);
+    chain.push(scalarToHex(c));
+  }
+  return chain;
 };
 
 export const detectKeyImageReuse = (keyImages: string[]): { reused: boolean; duplicates: string[] } => {

@@ -1,12 +1,31 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
 
-:root {
-  --bg: #0e141a;
-  --surface: rgba(14, 20, 26, 0.85);
-  --text: #e6edf3;
-  --muted: #9fb0bd;
-  --line: #2f3c47;
-  --accent: #53d4aa;
+[data-theme='dark'] {
+  --bg: #0b1418;
+  --panel: rgba(13, 25, 31, 0.84);
+  --panel-soft: rgba(20, 36, 43, 0.9);
+  --text: #e6f2f4;
+  --muted: #9eb4bb;
+  --line: #2d4650;
+  --accent: #52d4ab;
+  --accent-2: #6ca8ff;
+  --danger: #ff7f8a;
+  --ok: #7bdf89;
+  --shadow: rgba(0, 0, 0, 0.35);
+}
+
+[data-theme='light'] {
+  --bg: #f0f6f9;
+  --panel: rgba(255, 255, 255, 0.95);
+  --panel-soft: rgba(242, 248, 250, 0.96);
+  --text: #1a2b33;
+  --muted: #48626d;
+  --line: #c5d7de;
+  --accent: #0b8a62;
+  --accent-2: #1f6bd6;
+  --danger: #cc2f45;
+  --ok: #1f8c40;
+  --shadow: rgba(46, 79, 95, 0.14);
 }
 
 * {
@@ -16,43 +35,286 @@
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: 'Space Grotesk', sans-serif;
   color: var(--text);
+  font-family: 'Space Grotesk', sans-serif;
   background:
-    radial-gradient(circle at 12% 10%, rgba(83, 212, 170, 0.2), transparent 34%),
-    radial-gradient(circle at 82% 18%, rgba(98, 166, 255, 0.2), transparent 28%),
-    linear-gradient(160deg, #0a0f14 0%, #101922 55%, #0c131a 100%);
+    radial-gradient(circle at 12% 10%, color-mix(in srgb, var(--accent) 28%, transparent), transparent 33%),
+    radial-gradient(circle at 86% 18%, color-mix(in srgb, var(--accent-2) 22%, transparent), transparent 30%),
+    linear-gradient(165deg, color-mix(in srgb, var(--bg), #000 5%), var(--bg));
+}
+
+.skip-link {
+  position: absolute;
+  top: -120%;
+  left: 0;
+  z-index: 200;
+  padding: 0.5rem 0.9rem;
+  text-decoration: none;
+  color: #fff;
+  background: var(--accent);
+}
+
+.skip-link:focus {
+  top: 0;
 }
 
 .shell {
-  width: min(1100px, 94vw);
+  width: min(1160px, 94vw);
   margin: 0 auto;
   padding: 1.4rem 0 2rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.hero,
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 18px 40px var(--shadow);
 }
 
 .hero {
+  position: relative;
+  padding: 1.7rem;
+}
+
+.theme-toggle {
+  position: absolute;
+  top: 0.9rem;
+  right: 0.9rem;
+  width: 2.5rem;
+  height: 2.5rem;
   border: 1px solid var(--line);
-  border-radius: 1rem;
-  padding: 1.6rem;
-  background: var(--surface);
-  backdrop-filter: blur(8px);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 1.1rem;
+}
+
+.theme-toggle:hover {
+  border-color: var(--accent);
 }
 
 .eyebrow {
   margin: 0;
-  color: var(--accent);
+  font-size: 0.76rem;
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  font-size: 0.75rem;
+  color: var(--accent);
 }
 
 h1 {
-  margin: 0.4rem 0 0.7rem;
-  font-size: clamp(1.7rem, 4.5vw, 2.5rem);
+  margin: 0.42rem 0 0.5rem;
+  line-height: 1.15;
+  font-size: clamp(1.8rem, 4.5vw, 2.8rem);
 }
 
-p {
+.hero-text {
   margin: 0;
   color: var(--muted);
-  line-height: 1.5;
+  max-width: 75ch;
+}
+
+.hero-chips {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.85rem;
+}
+
+.chip,
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  background: var(--panel-soft);
+}
+
+.panel {
+  padding: 1rem;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  margin-bottom: 0.8rem;
+}
+
+h2 {
+  margin: 0;
+  font-size: clamp(1.2rem, 2.2vw, 1.5rem);
+}
+
+h3 {
+  margin: 0 0 0.55rem;
+}
+
+.controls-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.7rem;
+  margin-bottom: 0.8rem;
+}
+
+label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+input,
+select,
+button {
+  font-family: inherit;
+  font-size: 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  background: var(--panel-soft);
+  color: var(--text);
+  padding: 0.45rem 0.55rem;
+}
+
+button {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ring-stage {
+  position: relative;
+  margin: 0.9rem 0;
+  height: 290px;
+}
+
+.ring-track {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 82%;
+  height: 82%;
+  border: 2px dashed var(--line);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.ring-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 90px;
+  height: 52px;
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  background: var(--panel-soft);
+  display: grid;
+  place-content: center;
+  font-size: 0.83rem;
+  color: var(--muted);
+}
+
+.ring-node-signer {
+  border-color: var(--accent);
+}
+
+.ring-node-active {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--text);
+}
+
+.info-grid {
+  display: grid;
+  gap: 0.48rem;
+}
+
+.info-grid p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.chain {
+  display: inline-block;
+  margin-right: 0.38rem;
+  margin-bottom: 0.2rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+}
+
+.chain.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.cards-three {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.7rem;
+}
+
+.mini-card {
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  padding: 0.8rem;
+  background: var(--panel-soft);
+}
+
+.mini-card p,
+.note {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.note {
+  margin-top: 0.7rem;
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.danger {
+  color: var(--danger);
+}
+
+.error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+@media (max-width: 740px) {
+  .ring-stage {
+    height: 250px;
+  }
+
+  .ring-track {
+    width: 88%;
+    height: 88%;
+  }
+
+  .ring-node {
+    width: 78px;
+    height: 46px;
+    font-size: 0.78rem;
+  }
 }
