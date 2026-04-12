@@ -161,6 +161,9 @@ export const verifyGroupSignature = async (
   if (payload.credentialId !== signature.credentialId) {
     return false;
   }
+  if (JSON.stringify(payload.memberPublicJwk) !== JSON.stringify(signature.memberPublicJwk)) {
+    return false;
+  }
   const signingPayload = JSON.stringify({
     v: 1,
     message: signature.message,

@@ -80,6 +80,11 @@ const b64UrlToBytes = (s: string): Uint8Array => {
   return out;
 };
 
+const seedToSecretScalarHex = (seedBytes: Uint8Array): string => {
+  const ext = ed25519.utils.getExtendedPublicKey(seedBytes);
+  return scalarToHex(mod(ext.scalar));
+};
+
 const pointFromHex = (hex: string) => ed25519.Point.fromHex(hex);
 
 const hashToScalar = async (...chunks: Uint8Array[]): Promise<bigint> => {
@@ -128,13 +133,14 @@ export const generateRingMembers = async (ringSize: number): Promise<RingKeyPair
       throw new Error('WebCrypto did not provide Ed25519 JWK key material');
     }
     const publicBytes = b64UrlToBytes(publicJwk.x);
-    const secretBytes = b64UrlToBytes(privateJwk.d);
+    const secretSeedBytes = b64UrlToBytes(privateJwk.d);
     members.push({
       id: `M${i + 1}`,
       publicJwk,
       privateJwk,
       publicKeyHex: bytesToHex(publicBytes),
-      secretScalarHex: bytesToHex(secretBytes)
+      // Ed25519 private JWK `d` is a seed; LSAG needs the clamped scalar.
+      secretScalarHex: seedToSecretScalarHex(secretSeedBytes)
     });
   }
   return members;
@@ -206,8 +212,14 @@ export const verifyLsag = async (message: string, signature: LsagSignature): Pro
   if (keyImage.equals(ed25519.Point.ZERO)) {
     return false;
   }
+  if (keyImage.isSmallOrder() || !keyImage.isTorsionFree()) {
+    return false;
+  }
   const c0 = hexToScalar(signature.c0Hex);
   const pubPoints = signature.ring.map((m) => pointFromHex(m.publicKeyHex));
+  if (pubPoints.some((p) => p.isSmallOrder() || !p.isTorsionFree())) {
+    return false;
+  }
   const hpPoints = await Promise.all(pubPoints.map((p) => hashPoint(p)));
 
   let c = c0;
