@@ -223,8 +223,8 @@ const ringVisual = (): string => {
         idx === state.signerIndex ? 'ring-node-signer' : '',
         active ? 'ring-node-active' : ''
       ].join(' ');
-      return `<div class="${classes}" style="left:${x}%;top:${y}%" title="${member.id}">
-        <span>${member.id}</span>
+      return `<div class="${classes}" style="left:${x}%;top:${y}%" title="${member.id}" role="listitem" aria-label="${member.id}${idx === state.signerIndex ? ' (selected signer)' : ''}${active ? ', challenge active' : ''}">
+        <span aria-hidden="true">${member.id}</span>
       </div>`;
     })
     .join('');
@@ -253,75 +253,78 @@ const render = (): void => {
         </div>
       </header>
 
-      ${state.error ? `<section class="panel error">${state.error}</section>` : ''}
+      ${state.error ? `<section class="panel error" role="alert" aria-live="assertive">${state.error}</section>` : ''}
 
       <section class="panel" aria-labelledby="ex1-title">
         <div class="panel-head">
-          <h2 id="ex1-title">Exhibit 1 - The Ring</h2>
-          <span class="badge">Verifier cannot identify signer</span>
+          <h2 id="ex1-title">Exhibit 1 — The Ring</h2>
+          <span class="badge" aria-hidden="true">Verifier cannot identify signer</span>
         </div>
-        <div class="controls-row">
-          <label>Ring size
-            <input id="ring-size" type="range" min="2" max="11" value="${state.ringSize}" />
-            <span>${state.ringSize}</span>
+        <fieldset class="controls-row">
+          <legend class="sr-only">Ring signature controls</legend>
+          <label for="ring-size">Ring size
+            <input id="ring-size" type="range" min="2" max="11" value="${state.ringSize}" aria-valuenow="${state.ringSize}" aria-valuemin="2" aria-valuemax="11" />
+            <output>${state.ringSize}</output>
           </label>
-          <label>Actual signer (hidden from verifier)
+          <label for="signer-select">Actual signer (hidden from verifier)
             <select id="signer-select">
               ${state.members.map((m, i) => `<option value="${i}" ${i === state.signerIndex ? 'selected' : ''}>${m.id}</option>`).join('')}
             </select>
           </label>
-          <label>Message
-            <input id="ex1-message" value="${state.ex1Message}" />
+          <label for="ex1-message">Message
+            <input id="ex1-message" type="text" value="${state.ex1Message}" />
           </label>
           <button id="ex1-run" type="button">Sign and Verify</button>
-        </div>
-        <div class="ring-stage">
+        </fieldset>
+        <div class="ring-stage" role="list" aria-label="Visual ring showing ${state.members.length} members with challenge propagation">
           <div class="ring-track"></div>
           ${ringVisual()}
         </div>
-        <div class="info-grid">
+        <div class="info-grid" aria-live="polite" role="status">
           <p><strong>Verification:</strong> ${state.ex1Verified ? '<span class="ok">valid ring signature</span>' : '<span class="muted">no signature yet</span>'}</p>
           <p><strong>Signer clue to verifier:</strong> none (all members satisfy the challenge chain equation)</p>
-          <p><strong>Challenge chain:</strong> ${state.ex1Chain.length > 0 ? state.ex1Chain.map((c, i) => `<span class="chain ${state.ex1ActiveStep === i ? 'active' : ''}">c${i}=${shortHex(c, 7, 5)}</span>`).join(' ') : 'run exhibit to animate'}</p>
-          <p><strong>Key image:</strong> ${latestSig ? shortHex(latestSig.keyImageHex, 16, 14) : 'not generated'}</p>
+          <p><strong>Challenge chain:</strong> <span class="chain-wrap">${state.ex1Chain.length > 0 ? state.ex1Chain.map((c, i) => `<span class="chain ${state.ex1ActiveStep === i ? 'active' : ''}" aria-label="challenge ${i}">c${i}=${shortHex(c, 7, 5)}</span>`).join(' ') : 'run exhibit to animate'}</span></p>
+          <p><strong>Key image:</strong> <code class="hex-value">${latestSig ? shortHex(latestSig.keyImageHex, 16, 14) : 'not generated'}</code></p>
         </div>
       </section>
 
       <section class="panel" aria-labelledby="ex2-title">
         <div class="panel-head">
-          <h2 id="ex2-title">Exhibit 2 - Linkability and Key Images</h2>
-          <span class="badge">Double-spend detection</span>
+          <h2 id="ex2-title">Exhibit 2 — Linkability and Key Images</h2>
+          <span class="badge" aria-hidden="true">Double-spend detection</span>
         </div>
-        <div class="controls-row">
-          <label>Message A
-            <input id="ex2-message-a" value="${state.ex2MessageA}" />
+        <fieldset class="controls-row">
+          <legend class="sr-only">Key image linkability controls</legend>
+          <label for="ex2-message-a">Message A
+            <input id="ex2-message-a" type="text" value="${state.ex2MessageA}" />
           </label>
-          <label>Message B
-            <input id="ex2-message-b" value="${state.ex2MessageB}" />
+          <label for="ex2-message-b">Message B
+            <input id="ex2-message-b" type="text" value="${state.ex2MessageB}" />
           </label>
           <button id="ex2-run" type="button">Sign Both With Same Member</button>
-        </div>
-        <div class="info-grid">
-          <p><strong>Key image A:</strong> ${ex2 ? shortHex(ex2.keyImageA, 16, 14) : 'pending'}</p>
-          <p><strong>Key image B:</strong> ${ex2 ? shortHex(ex2.keyImageB, 16, 14) : 'pending'}</p>
-          <p><strong>Reuse detected:</strong> ${ex2 ? (ex2.reused ? '<span class="danger">yes - same signer secret reused</span>' : '<span class="ok">no</span>') : 'run exhibit'}</p>
+        </fieldset>
+        <div class="info-grid" aria-live="polite" role="status">
+          <p><strong>Key image A:</strong> <code class="hex-value">${ex2 ? shortHex(ex2.keyImageA, 16, 14) : 'pending'}</code></p>
+          <p><strong>Key image B:</strong> <code class="hex-value">${ex2 ? shortHex(ex2.keyImageB, 16, 14) : 'pending'}</code></p>
+          <p><strong>Reuse detected:</strong> ${ex2 ? (ex2.reused ? '<span class="danger" role="alert">yes — same signer secret reused</span>' : '<span class="ok">no</span>') : 'run exhibit'}</p>
           <p><strong>Monero context:</strong> key images allow network nodes to reject duplicate spends while preserving signer ambiguity.</p>
         </div>
       </section>
 
       <section class="panel" aria-labelledby="ex3-title">
         <div class="panel-head">
-          <h2 id="ex3-title">Exhibit 3 - Ring Size vs Privacy</h2>
-          <span class="badge">Anonymity set and performance</span>
+          <h2 id="ex3-title">Exhibit 3 — Ring Size vs Privacy</h2>
+          <span class="badge" aria-hidden="true">Anonymity set and performance</span>
         </div>
-        <div class="controls-row">
-          <label>Anonymity set size
-            <input id="ex3-size" type="range" min="2" max="11" value="${state.ringSize}" />
-            <span>${state.ringSize}</span>
+        <fieldset class="controls-row">
+          <legend class="sr-only">Ring size performance controls</legend>
+          <label for="ex3-size">Anonymity set size
+            <input id="ex3-size" type="range" min="2" max="11" value="${state.ringSize}" aria-valuenow="${state.ringSize}" aria-valuemin="2" aria-valuemax="11" />
+            <output>${state.ringSize}</output>
           </label>
-          <button id="ex3-run" type="button" ${state.ex3Busy ? 'disabled' : ''}>${state.ex3Busy ? 'Measuring...' : 'Measure Real Timing'}</button>
-        </div>
-        <div class="info-grid">
+          <button id="ex3-run" type="button" ${state.ex3Busy ? 'disabled aria-busy="true"' : ''}>${state.ex3Busy ? 'Measuring…' : 'Measure Real Timing'}</button>
+        </fieldset>
+        <div class="info-grid" aria-live="polite" role="status">
           <p><strong>Privacy intuition:</strong> larger ring means more plausible signers.</p>
           <p><strong>Timing sample:</strong> ${ex3 ? `sign ${ex3.signMs.toFixed(2)} ms · verify ${ex3.verifyMs.toFixed(2)} ms (ring ${ex3.ringSize})` : 'not measured yet'}</p>
           <p><strong>Monero ring size timeline:</strong> 4 → 7 → 11 → 16 mandatory minimum progression.</p>
@@ -331,22 +334,24 @@ const render = (): void => {
 
       <section class="panel" aria-labelledby="ex4-title">
         <div class="panel-head">
-          <h2 id="ex4-title">Exhibit 4 - Group Signatures</h2>
-          <span class="badge">Accountable anonymity</span>
+          <h2 id="ex4-title">Exhibit 4 — Group Signatures</h2>
+          <span class="badge" aria-hidden="true">Accountable anonymity</span>
         </div>
-        <div class="controls-row">
-          <label>Member credential
+        <fieldset class="controls-row">
+          <legend class="sr-only">Group signature controls</legend>
+          <label for="group-member">Member credential
             <select id="group-member">
               ${group.credentials.map((c, i) => `<option value="${i}" ${i === group.selected ? 'selected' : ''}>${c.memberId}</option>`).join('')}
             </select>
           </label>
-          <label>Message
-            <input id="group-message" value="${state.groupMessage}" />
+          <label for="group-message">Message
+            <input id="group-message" type="text" value="${state.groupMessage}" />
           </label>
           <button id="group-sign" type="button">Anonymous Group Sign</button>
-          <button id="group-open" type="button" ${group.latestSignature ? '' : 'disabled'}>Manager Open Signature</button>
-        </div>
-        <div class="info-grid">
+          <button id="group-open" type="button" ${group.latestSignature ? '' : 'disabled'} aria-describedby="open-desc">Manager Open Signature</button>
+          <span id="open-desc" class="sr-only">Reveals which group member produced the signature</span>
+        </fieldset>
+        <div class="info-grid" aria-live="polite" role="status">
           <p><strong>Verifier result:</strong> ${group.verified ? '<span class="ok">valid group credential + member signature</span>' : '<span class="muted">no signature yet</span>'}</p>
           <p><strong>Signer identity to verifier:</strong> hidden (only sees manager-issued credential proof)</p>
           <p><strong>Manager open result:</strong> ${group.openedMember ?? 'not opened yet'}</p>
@@ -356,8 +361,8 @@ const render = (): void => {
 
       <section class="panel" aria-labelledby="ex5-title">
         <div class="panel-head">
-          <h2 id="ex5-title">Exhibit 5 - Real World</h2>
-          <span class="badge">Monero, Zcash, Bitcoin</span>
+          <h2 id="ex5-title">Exhibit 5 — Real World</h2>
+          <span class="badge" aria-hidden="true">Monero, Zcash, Bitcoin</span>
         </div>
         <div class="cards-three">
           <article class="mini-card">

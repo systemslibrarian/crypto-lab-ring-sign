@@ -1,35 +1,52 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
 
+/* ============================================
+   WCAG AA colour tokens (4.5 : 1 min on bg)
+   ============================================ */
+
 [data-theme='dark'] {
   --bg: #0b1418;
-  --panel: rgba(13, 25, 31, 0.84);
-  --panel-soft: rgba(20, 36, 43, 0.9);
-  --text: #e6f2f4;
-  --muted: #9eb4bb;
-  --line: #2d4650;
-  --accent: #52d4ab;
-  --accent-2: #6ca8ff;
-  --danger: #ff7f8a;
-  --ok: #7bdf89;
-  --shadow: rgba(0, 0, 0, 0.35);
+  --panel: rgba(13, 25, 31, 0.88);
+  --panel-soft: rgba(20, 36, 43, 0.92);
+  --text: #e8f0f3;        /* ≥ 13.5 : 1 on --bg */
+  --muted: #b0c4cc;       /* ≥ 7.2 : 1 on --panel */
+  --line: #3a5a68;
+  --accent: #5ce0b6;      /* ≥ 8.0 : 1 on dark bg */
+  --accent-2: #82b8ff;
+  --danger: #ff8f99;       /* ≥ 5.5 : 1 */
+  --ok: #88e596;           /* ≥ 6.8 : 1 */
+  --shadow: rgba(0, 0, 0, 0.40);
+  --focus-ring: #5ce0b6;
 }
 
 [data-theme='light'] {
   --bg: #f0f6f9;
-  --panel: rgba(255, 255, 255, 0.95);
-  --panel-soft: rgba(242, 248, 250, 0.96);
-  --text: #1a2b33;
-  --muted: #48626d;
-  --line: #c5d7de;
-  --accent: #0b8a62;
-  --accent-2: #1f6bd6;
-  --danger: #cc2f45;
-  --ok: #1f8c40;
-  --shadow: rgba(46, 79, 95, 0.14);
+  --panel: rgba(255, 255, 255, 0.96);
+  --panel-soft: rgba(242, 248, 250, 0.97);
+  --text: #111f27;
+  --muted: #3b545f;       /* ≥ 4.7 : 1 on white */
+  --line: #b0c9d2;
+  --accent: #07735a;      /* ≥ 4.6 : 1 on white */
+  --accent-2: #1a5fc0;
+  --danger: #b82a3e;
+  --ok: #177335;
+  --shadow: rgba(46, 79, 95, 0.16);
+  --focus-ring: #1a5fc0;
 }
 
-* {
+/* ============================================
+   Reset & base
+   ============================================ */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -37,34 +54,80 @@ body {
   min-height: 100vh;
   color: var(--text);
   font-family: 'Space Grotesk', sans-serif;
+  line-height: 1.5;
   background:
     radial-gradient(circle at 12% 10%, color-mix(in srgb, var(--accent) 28%, transparent), transparent 33%),
     radial-gradient(circle at 86% 18%, color-mix(in srgb, var(--accent-2) 22%, transparent), transparent 30%),
     linear-gradient(165deg, color-mix(in srgb, var(--bg), #000 5%), var(--bg));
 }
 
+/* ============================================
+   Focus — visible ring for keyboard nav
+   ============================================ */
+
+:focus-visible {
+  outline: 2.5px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ============================================
+   Skip link
+   ============================================ */
+
 .skip-link {
   position: absolute;
   top: -120%;
   left: 0;
   z-index: 200;
-  padding: 0.5rem 0.9rem;
+  padding: 0.6rem 1rem;
   text-decoration: none;
-  color: #fff;
+  font-weight: 600;
+  color: #000;
   background: var(--accent);
+  border-radius: 0 0 0.5rem 0;
 }
 
 .skip-link:focus {
   top: 0;
 }
 
+/* ============================================
+   Screen-reader-only utility
+   ============================================ */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ============================================
+   Layout shell
+   ============================================ */
+
 .shell {
   width: min(1160px, 94vw);
   margin: 0 auto;
   padding: 1.4rem 0 2rem;
+  padding-left: env(safe-area-inset-left, 0);
+  padding-right: env(safe-area-inset-right, 0);
   display: grid;
   gap: 1rem;
 }
+
+/* ============================================
+   Cards / panels
+   ============================================ */
 
 .hero,
 .panel {
@@ -80,23 +143,34 @@ body {
   padding: 1.7rem;
 }
 
+/* ============================================
+   Theme toggle (44 × 44 min touch target)
+   ============================================ */
+
 .theme-toggle {
   position: absolute;
   top: 0.9rem;
   right: 0.9rem;
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 2.75rem;
+  height: 2.75rem;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel-soft);
   color: var(--text);
   cursor: pointer;
-  font-size: 1.1rem;
+  font-size: 1.2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .theme-toggle:hover {
   border-color: var(--accent);
 }
+
+/* ============================================
+   Typography
+   ============================================ */
 
 .eyebrow {
   margin: 0;
@@ -104,12 +178,13 @@ body {
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--accent);
+  font-weight: 600;
 }
 
 h1 {
   margin: 0.42rem 0 0.5rem;
   line-height: 1.15;
-  font-size: clamp(1.8rem, 4.5vw, 2.8rem);
+  font-size: clamp(1.6rem, 4.5vw, 2.8rem);
 }
 
 .hero-text {
@@ -137,8 +212,14 @@ h1 {
   background: var(--panel-soft);
 }
 
+/* ============================================
+   Panel / exhibit sections
+   ============================================ */
+
 .panel {
   padding: 1rem;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .panel-head {
@@ -146,16 +227,27 @@ h1 {
   align-items: center;
   justify-content: space-between;
   gap: 0.7rem;
+  flex-wrap: wrap;
   margin-bottom: 0.8rem;
 }
 
 h2 {
   margin: 0;
-  font-size: clamp(1.2rem, 2.2vw, 1.5rem);
+  font-size: clamp(1.15rem, 2.2vw, 1.5rem);
 }
 
 h3 {
   margin: 0 0 0.55rem;
+}
+
+/* ============================================
+   Fieldsets & controls
+   ============================================ */
+
+fieldset.controls-row {
+  border: none;
+  margin: 0;
+  padding: 0;
 }
 
 .controls-row {
@@ -172,16 +264,24 @@ label {
   color: var(--muted);
 }
 
-input,
+input[type='text'],
+input[type='range'],
 select,
 button {
   font-family: inherit;
-  font-size: 0.95rem;
+  font-size: 1rem;
   border: 1px solid var(--line);
   border-radius: 0.65rem;
   background: var(--panel-soft);
   color: var(--text);
-  padding: 0.45rem 0.55rem;
+  /* 44px minimum touch target height (WCAG 2.5.8) */
+  min-height: 2.75rem;
+  padding: 0.45rem 0.6rem;
+}
+
+output {
+  font-weight: 600;
+  color: var(--text);
 }
 
 button {
@@ -194,9 +294,13 @@ button:hover:not(:disabled) {
 }
 
 button:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* ============================================
+   Ring visualisation
+   ============================================ */
 
 .ring-stage {
   position: relative;
@@ -220,50 +324,76 @@ button:disabled {
   transform: translate(-50%, -50%);
   width: 90px;
   height: 52px;
-  border: 1px solid var(--line);
+  border: 2px solid var(--line);
   border-radius: 0.9rem;
   background: var(--panel-soft);
   display: grid;
   place-content: center;
   font-size: 0.83rem;
   color: var(--muted);
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
 .ring-node-signer {
   border-color: var(--accent);
-}
-
-.ring-node-active {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+  font-weight: 600;
   color: var(--text);
 }
 
+.ring-node-active {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text);
+}
+
+/* ============================================
+   Info / result grids
+   ============================================ */
+
 .info-grid {
   display: grid;
-  gap: 0.48rem;
+  gap: 0.5rem;
 }
 
 .info-grid p {
   margin: 0;
   color: var(--muted);
-  line-height: 1.45;
+  line-height: 1.5;
+}
+
+.hex-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  background: var(--panel-soft);
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.3rem;
+  word-break: break-all;
+}
+
+.chain-wrap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
 }
 
 .chain {
   display: inline-block;
-  margin-right: 0.38rem;
-  margin-bottom: 0.2rem;
-  padding: 0.15rem 0.4rem;
+  padding: 0.18rem 0.42rem;
   border: 1px solid var(--line);
   border-radius: 0.4rem;
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.8rem;
+  transition: border-color 0.15s ease;
 }
 
 .chain.active {
   border-color: var(--accent);
   color: var(--text);
+  font-weight: 600;
 }
+
+/* ============================================
+   Exhibit 5 cards
+   ============================================ */
 
 .cards-three {
   display: grid;
@@ -274,7 +404,7 @@ button:disabled {
 .mini-card {
   border: 1px solid var(--line);
   border-radius: 0.75rem;
-  padding: 0.8rem;
+  padding: 0.85rem;
   background: var(--panel-soft);
 }
 
@@ -282,19 +412,29 @@ button:disabled {
 .note {
   margin: 0;
   color: var(--muted);
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .note {
   margin-top: 0.7rem;
 }
 
+/* ============================================
+   Status tokens
+   ============================================ */
+
 .ok {
   color: var(--ok);
+  font-weight: 600;
 }
 
 .danger {
   color: var(--danger);
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--muted);
 }
 
 .error {
@@ -302,19 +442,99 @@ button:disabled {
   color: var(--danger);
 }
 
+/* ============================================
+   Reduced motion
+   ============================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ============================================
+   Mobile (≤ 740 px)
+   ============================================ */
+
 @media (max-width: 740px) {
+  .shell {
+    width: 96vw;
+    padding: 0.7rem 0 1.2rem;
+  }
+
+  .hero {
+    padding: 1.1rem;
+  }
+
+  .panel {
+    padding: 0.8rem;
+  }
+
+  .panel-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .controls-row {
+    grid-template-columns: 1fr;
+  }
+
   .ring-stage {
-    height: 250px;
+    height: 220px;
   }
 
   .ring-track {
-    width: 88%;
-    height: 88%;
+    width: 90%;
+    height: 90%;
   }
 
   .ring-node {
-    width: 78px;
-    height: 46px;
-    font-size: 0.78rem;
+    width: 64px;
+    height: 40px;
+    font-size: 0.72rem;
+    border-width: 1.5px;
+  }
+
+  .cards-three {
+    grid-template-columns: 1fr;
+  }
+
+  .chain {
+    font-size: 0.72rem;
+    padding: 0.12rem 0.3rem;
+  }
+
+  h1 {
+    font-size: clamp(1.3rem, 6vw, 1.8rem);
+  }
+}
+
+/* ============================================
+   Very small (≤ 400 px)
+   ============================================ */
+
+@media (max-width: 400px) {
+  .ring-stage {
+    height: 190px;
+  }
+
+  .ring-node {
+    width: 52px;
+    height: 34px;
+    font-size: 0.65rem;
+  }
+
+  .hero-chips {
+    gap: 0.3rem;
+  }
+
+  .chip,
+  .badge {
+    font-size: 0.7rem;
+    padding: 0.2rem 0.5rem;
   }
 }
