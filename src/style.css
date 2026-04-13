@@ -151,10 +151,10 @@ body {
   position: absolute;
   top: 0.9rem;
   right: 0.9rem;
-  width: 2.75rem;
-  height: 2.75rem;
+  width: 2.6rem;
+  height: 2.6rem;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 50%;
   background: var(--panel-soft);
   color: var(--text);
   cursor: pointer;
@@ -162,6 +162,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  z-index: 10;
 }
 
 .theme-toggle:hover {

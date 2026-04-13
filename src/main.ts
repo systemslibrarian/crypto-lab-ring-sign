@@ -107,8 +107,8 @@ const setTheme = (theme: ThemeMode): void => {
 
 const themeMeta = (theme: ThemeMode): { icon: string; label: string } =>
   theme === 'dark'
-    ? { icon: '◐', label: 'Switch to light mode' }
-    : { icon: '◑', label: 'Switch to dark mode' };
+    ? { icon: '🌙', label: 'Switch to light mode' }
+    : { icon: '☀️', label: 'Switch to dark mode' };
 
 const animateChallengeChain = async (chain: string[]): Promise<void> => {
   state.ex1ActiveStep = 0;
