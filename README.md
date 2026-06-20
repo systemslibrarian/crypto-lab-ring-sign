@@ -15,7 +15,7 @@ This demo compares two anonymous-authentication models: LSAG-style ring signatur
 ## Live Demo
 Live demo: https://systemslibrarian.github.io/crypto-lab-ring-sign/
 
-The page lets users choose ring size, select a hidden signer, generate LSAG signatures, compare key images, and measure signing versus verification cost. It also includes explicit controls for issuing group credentials, anonymously signing as a group member, and opening the resulting signature through the manager flow.
+The page lets users choose ring size, select a hidden signer, generate LSAG signatures, and inspect the actual responses the verifier sees — making it concrete that every member's response is a uniform scalar, so the real signer is indistinguishable. A "try to break it" control corrupts a response or the message and shows verification reject it, because the challenge chain no longer closes at `c0`. A timing sweep charts signing versus verification cost across every ring size so the linear privacy-versus-cost tradeoff is visible as a curve. Each exhibit carries a collapsible "how it works" explainer. The group-signature section issues credentials, signs anonymously, and opens through the manager flow, with an explicit note about which anonymity property the teaching model does and does not provide.
 
 ## What Can Go Wrong
 - Reused signer secret in multiple ring spends: the key image repeats, which breaks unlinkability for that signer and exposes a double-spend attempt.

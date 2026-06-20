@@ -252,6 +252,39 @@ export const reconstructChallengeChain = async (
   return chain;
 };
 
+// Flip a single hex nibble so the value provably changes (never returns the input).
+const flipNibble = (hex: string, index = 0): string => {
+  if (hex.length === 0) {
+    return hex;
+  }
+  const i = Math.min(index, hex.length - 1);
+  const current = Number.parseInt(hex[i], 16);
+  const next = ((current + 1) % 16).toString(16);
+  return hex.slice(0, i) + next + hex.slice(i + 1);
+};
+
+export type TamperField = 'response' | 'c0';
+
+// Corrupt one element of a signature so a learner can watch verification reject it.
+// `response` breaks the challenge chain so it no longer closes at c0;
+// `c0` changes the chain's starting point with the same effect.
+export const tamperLsagSignature = (
+  signature: LsagSignature,
+  field: TamperField
+): LsagSignature => {
+  const clone: LsagSignature = {
+    ...signature,
+    ring: signature.ring.map((m) => ({ ...m })),
+    responsesHex: [...signature.responsesHex]
+  };
+  if (field === 'response') {
+    clone.responsesHex[0] = flipNibble(clone.responsesHex[0]);
+  } else {
+    clone.c0Hex = flipNibble(clone.c0Hex);
+  }
+  return clone;
+};
+
 export const detectKeyImageReuse = (keyImages: string[]): { reused: boolean; duplicates: string[] } => {
   const seen = new Set<string>();
   const duplicates = new Set<string>();

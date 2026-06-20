@@ -5,6 +5,7 @@ import {
   reconstructChallengeChain,
   ringSignAndVerify,
   signLsag,
+  tamperLsagSignature,
   verifyLsag,
   type LsagSignature,
   type RingKeyPair
@@ -34,6 +35,13 @@ type PerfSample = {
   verifyMs: number;
 };
 
+type TamperKind = 'response' | 'message';
+
+type TamperResult = {
+  kind: TamperKind;
+  verified: boolean;
+};
+
 type GroupState = {
   manager: GroupManager | null;
   credentials: GroupCredential[];
@@ -52,6 +60,7 @@ const state: {
   ex1Verified: boolean;
   ex1Chain: string[];
   ex1ActiveStep: number;
+  ex1Tamper: TamperResult | null;
   ex2MessageA: string;
   ex2MessageB: string;
   ex2Result: {
@@ -59,7 +68,7 @@ const state: {
     keyImageB: string;
     reused: boolean;
   } | null;
-  ex3Perf: PerfSample | null;
+  ex3Curve: PerfSample[];
   ex3Busy: boolean;
   group: GroupState;
   groupMessage: string;
@@ -73,10 +82,11 @@ const state: {
   ex1Verified: false,
   ex1Chain: [],
   ex1ActiveStep: -1,
+  ex1Tamper: null,
   ex2MessageA: 'Spend output #a1',
   ex2MessageB: 'Spend output #a1 again',
   ex2Result: null,
-  ex3Perf: null,
+  ex3Curve: [],
   ex3Busy: false,
   group: {
     manager: null,
@@ -96,6 +106,13 @@ const shortHex = (hex: string, left = 10, right = 8): string => {
   }
   return `${hex.slice(0, left)}...${hex.slice(-right)}`;
 };
+
+// Collapsible, keyboard-accessible mechanism explainer rendered under each exhibit.
+const explainer = (summary: string, bodyHtml: string): string => `
+  <details class="explainer">
+    <summary>${summary}</summary>
+    <div class="explainer-body">${bodyHtml}</div>
+  </details>`;
 
 const getTheme = (): ThemeMode =>
   document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
@@ -128,6 +145,7 @@ const setupRing = async (ringSize: number): Promise<void> => {
   state.ex1Verified = false;
   state.ex1Chain = [];
   state.ex1ActiveStep = -1;
+  state.ex1Tamper = null;
   state.ex2Result = null;
 };
 
@@ -154,7 +172,33 @@ const runExhibit1 = async (): Promise<void> => {
   state.ex1Signature = signature;
   state.ex1Verified = verified;
   state.ex1Chain = chain;
+  state.ex1Tamper = null;
   await animateChallengeChain(chain);
+};
+
+const safeVerify = async (message: string, signature: LsagSignature): Promise<boolean> => {
+  try {
+    return await verifyLsag(message, signature);
+  } catch {
+    // A corrupted point/scalar can throw during decoding — that is still a rejection.
+    return false;
+  }
+};
+
+const runExhibit1Tamper = async (kind: TamperKind): Promise<void> => {
+  if (!state.ex1Signature) {
+    return;
+  }
+  let verified: boolean;
+  if (kind === 'message') {
+    // Same signature, but the verifier checks a different message than was signed.
+    verified = await safeVerify(`${state.ex1Message} (modified)`, state.ex1Signature);
+  } else {
+    // Flip one byte of a response so the challenge chain no longer closes at c0.
+    const corrupted = tamperLsagSignature(state.ex1Signature, 'response');
+    verified = await safeVerify(state.ex1Message, corrupted);
+  }
+  state.ex1Tamper = { kind, verified };
 };
 
 const runExhibit2 = async (): Promise<void> => {
@@ -168,26 +212,45 @@ const runExhibit2 = async (): Promise<void> => {
   };
 };
 
+const RING_SIZES = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+const PERF_ITERATIONS = 6;
+
+// Sweep every ring size and average sign/verify over several runs so the
+// privacy-vs-cost relationship shows up as a curve rather than one noisy dot.
 const runExhibit3 = async (): Promise<void> => {
   state.ex3Busy = true;
+  state.ex3Curve = [];
   render();
-  const message = `perf-${Date.now()}`;
-  const members = await generateRingMembers(state.ringSize);
-  const signerIndex = Math.min(state.signerIndex, members.length - 1);
 
-  const signStart = performance.now();
-  const signature = await signLsag(message, members, signerIndex);
-  const signMs = performance.now() - signStart;
+  const curve: PerfSample[] = [];
+  for (const size of RING_SIZES) {
+    const members = await generateRingMembers(size);
+    let signTotal = 0;
+    let verifyTotal = 0;
+    for (let iter = 0; iter < PERF_ITERATIONS; iter += 1) {
+      const message = `perf-${size}-${iter}`;
+      const signerIndex = iter % size;
 
-  const verifyStart = performance.now();
-  await verifyLsag(message, signature);
-  const verifyMs = performance.now() - verifyStart;
+      const signStart = performance.now();
+      const signature = await signLsag(message, members, signerIndex);
+      signTotal += performance.now() - signStart;
 
-  state.ex3Perf = {
-    ringSize: state.ringSize,
-    signMs,
-    verifyMs
-  };
+      const verifyStart = performance.now();
+      await verifyLsag(message, signature);
+      verifyTotal += performance.now() - verifyStart;
+    }
+    curve.push({
+      ringSize: size,
+      signMs: signTotal / PERF_ITERATIONS,
+      verifyMs: verifyTotal / PERF_ITERATIONS
+    });
+    // Stream partial results so the chart fills in as the sweep runs.
+    state.ex3Curve = [...curve];
+    render();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  state.ex3Curve = curve;
   state.ex3Busy = false;
 };
 
@@ -235,9 +298,25 @@ const render = (): void => {
   const toggle = themeMeta(theme);
   const latestSig = state.ex1Signature;
   const ex2 = state.ex2Result;
-  const ex3 = state.ex3Perf;
+  const ex3Curve = state.ex3Curve;
   const group = state.group;
   const compareLine = isRingVsGroupSummary();
+
+  const maxMs = ex3Curve.reduce((m, s) => Math.max(m, s.signMs, s.verifyMs), 0) || 1;
+  const ex3ChartHtml = ex3Curve
+    .map((s) => {
+      const signW = Math.max(3, (s.signMs / maxMs) * 100);
+      const verifyW = Math.max(3, (s.verifyMs / maxMs) * 100);
+      return `<div class="curve-row" role="listitem" aria-label="Ring size ${s.ringSize}: sign ${s.signMs.toFixed(2)} milliseconds, verify ${s.verifyMs.toFixed(2)} milliseconds">
+        <span class="curve-size">ring ${s.ringSize}</span>
+        <span class="curve-bars" aria-hidden="true">
+          <span class="bar bar-sign" style="width:${signW}%"></span>
+          <span class="bar bar-verify" style="width:${verifyW}%"></span>
+        </span>
+        <span class="curve-val" aria-hidden="true">${s.signMs.toFixed(1)} / ${s.verifyMs.toFixed(1)} ms</span>
+      </div>`;
+    })
+    .join('');
 
   app.innerHTML = `
     <main class="shell" id="main-content" role="main">
@@ -286,6 +365,55 @@ const render = (): void => {
           <p><strong>Challenge chain:</strong> <span class="chain-wrap">${state.ex1Chain.length > 0 ? state.ex1Chain.map((c, i) => `<span class="chain ${state.ex1ActiveStep === i ? 'active' : ''}" aria-label="challenge ${i}">c${i}=${shortHex(c, 7, 5)}</span>`).join(' ') : 'run exhibit to animate'}</span></p>
           <p><strong>Key image:</strong> <code class="hex-value">${latestSig ? shortHex(latestSig.keyImageHex, 16, 14) : 'not generated'}</code></p>
         </div>
+
+        ${
+          latestSig
+            ? `<div class="responses">
+          <p class="responses-head"><strong>The ${latestSig.responsesHex.length} responses the verifier sees</strong> — one per ring member:</p>
+          <div class="response-grid" role="list" aria-label="Ring responses">
+            ${latestSig.responsesHex
+              .map(
+                (s, i) =>
+                  `<span class="response-chip" role="listitem"><span class="response-label">s${i}</span><code>${shortHex(s, 6, 6)}</code></span>`
+              )
+              .join('')}
+          </div>
+          <p class="responses-note">Every response is a uniform scalar. You chose <strong>${state.members[state.signerIndex]?.id ?? '—'}</strong>, so the ring above highlights them — but the verifier only sees the data here, and the real signer's response is statistically identical to the rest.</p>
+        </div>
+
+        <div class="tamper">
+          <p class="tamper-head"><strong>Try to break it</strong> — a valid signature must close the chain at c0 and bind to its exact message:</p>
+          <div class="tamper-row">
+            <button id="ex1-tamper-response" type="button" class="ghost">Flip one byte of a response</button>
+            <button id="ex1-tamper-message" type="button" class="ghost">Verify against a modified message</button>
+          </div>
+          ${
+            state.ex1Tamper
+              ? `<p class="tamper-result" role="status" aria-live="polite">${
+                  state.ex1Tamper.kind === 'response'
+                    ? 'Flipped one byte of s0 → '
+                    : 'Checked the signature against a changed message → '
+                }${
+                  state.ex1Tamper.verified
+                    ? '<span class="danger">unexpectedly valid</span>'
+                    : '<span class="ok">rejected</span>'
+                }${
+                  state.ex1Tamper.kind === 'response'
+                    ? ' (the recomputed chain no longer returns to c0).'
+                    : ' (the challenge is hashed over the message, so any edit changes every challenge).'
+                }</p>`
+              : ''
+          }
+        </div>`
+            : ''
+        }
+
+        ${explainer(
+          'How the ring hides the signer',
+          `<p>The signature is one starting challenge <code>c0</code> plus one response <code>s<sub>i</sub></code> per member. Verification walks the ring: from <code>c0</code> it recomputes the next challenge using each member's public key and response, and accepts only if the walk returns to <code>c0</code>.</p>
+           <p>To sign, the real member fills <em>every other</em> slot with a random response and derives each challenge honestly around the loop. Then they use their secret key to compute the single response that makes the loop close back at <code>c0</code>. Because all responses are uniform scalars, the verifier cannot tell which slot was closed with a secret — so any member of the ring is an equally plausible signer.</p>
+           <p>The <strong>key image</strong> is derived from the secret key and a hash of the public key. It is unique to the signer but reveals nothing about which ring member it belongs to — that is what makes Exhibit 2 possible.</p>`
+        )}
       </section>
 
       <section class="panel" aria-labelledby="ex2-title">
@@ -309,6 +437,11 @@ const render = (): void => {
           <p><strong>Reuse detected:</strong> ${ex2 ? (ex2.reused ? '<span class="danger" role="alert">yes — same signer secret reused</span>' : '<span class="ok">no</span>') : 'run exhibit'}</p>
           <p><strong>Monero context:</strong> key images allow network nodes to reject duplicate spends while preserving signer ambiguity.</p>
         </div>
+        ${explainer(
+          'Why the same signer always produces the same key image',
+          `<p>The key image is <code>I = x · H(P)</code>, where <code>x</code> is the signer's secret key and <code>H(P)</code> is a hash of their public key mapped to a curve point. It does not depend on the message, so signing two different messages with the same secret yields the <em>same</em> key image.</p>
+           <p>A network can publish every spent key image and reject any repeat — catching a double-spend — without ever learning which ring member produced it. Linkability and anonymity coexist: linkable <em>across a signer's own signatures</em>, anonymous <em>within each ring</em>.</p>`
+        )}
       </section>
 
       <section class="panel" aria-labelledby="ex3-title">
@@ -318,18 +451,29 @@ const render = (): void => {
         </div>
         <fieldset class="controls-row">
           <legend class="sr-only">Ring size performance controls</legend>
-          <label for="ex3-size">Anonymity set size
-            <input id="ex3-size" type="range" min="2" max="11" value="${state.ringSize}" aria-valuenow="${state.ringSize}" aria-valuemin="2" aria-valuemax="11" />
-            <output>${state.ringSize}</output>
-          </label>
-          <button id="ex3-run" type="button" ${state.ex3Busy ? 'disabled aria-busy="true"' : ''}>${state.ex3Busy ? 'Measuring…' : 'Measure Real Timing'}</button>
+          <button id="ex3-run" type="button" ${state.ex3Busy ? 'disabled aria-busy="true"' : ''}>${state.ex3Busy ? 'Measuring…' : `Run timing sweep (ring 2–11, ×${PERF_ITERATIONS})`}</button>
         </fieldset>
+        ${
+          ex3Curve.length > 0
+            ? `<div class="curve" role="list" aria-label="Average sign and verify time by ring size">
+                <div class="curve-legend" aria-hidden="true">
+                  <span><span class="swatch swatch-sign"></span>sign</span>
+                  <span><span class="swatch swatch-verify"></span>verify</span>
+                </div>
+                ${ex3ChartHtml}
+              </div>`
+            : '<p class="muted curve-empty">Run the sweep to chart how signing and verification cost scale with the anonymity set.</p>'
+        }
         <div class="info-grid" aria-live="polite" role="status">
-          <p><strong>Privacy intuition:</strong> larger ring means more plausible signers.</p>
-          <p><strong>Timing sample:</strong> ${ex3 ? `sign ${ex3.signMs.toFixed(2)} ms · verify ${ex3.verifyMs.toFixed(2)} ms (ring ${ex3.ringSize})` : 'not measured yet'}</p>
-          <p><strong>Monero ring size timeline:</strong> 4 → 7 → 11 → 16 mandatory minimum progression.</p>
-          <p><strong>Tradeoff:</strong> more decoys improve ambiguity but increase computation and transaction size.</p>
+          <p><strong>What the chart shows:</strong> cost grows roughly linearly with ring size — each extra decoy adds one more set of curve operations to both signing and verifying.</p>
+          <p><strong>The tradeoff:</strong> a larger ring means more plausible signers (better anonymity) but more computation and a larger signature.</p>
+          <p><strong>Monero ring size timeline:</strong> the mandatory minimum rose 4 → 7 → 11 → 16 over time, trading cost for stronger privacy.</p>
         </div>
+        ${explainer(
+          'Why bigger rings cost more',
+          `<p>Both signing and verification do <code>O(n)</code> work: each of the <code>n</code> ring members contributes two scalar-multiplications and a hash to the challenge chain. Doubling the ring roughly doubles the time and the signature size (one response per member).</p>
+           <p>Anonymity, meanwhile, grows only as the <em>set size</em> — a ring of 16 hides you among 16, not exponentially more. That diminishing return, against linear cost, is exactly why real systems pick a fixed, modest ring size rather than "as large as possible".</p>`
+        )}
       </section>
 
       <section class="panel" aria-labelledby="ex4-title">
@@ -357,6 +501,12 @@ const render = (): void => {
           <p><strong>Manager open result:</strong> ${group.openedMember ?? 'not opened yet'}</p>
           <p><strong>Ring vs Group:</strong> ${compareLine}</p>
         </div>
+        <p class="note caveat"><strong>Teaching honesty:</strong> this exhibit sends each member's P-256 public key in the clear inside every signature, so two signatures from the same member are trivially linkable and only the credential-to-identity mapping is hidden. A production scheme (e.g. BBS+ / randomizable credentials) hides the member key itself, making even repeat signatures unlinkable to everyone but the manager. Read this as a model of the <em>accountability</em> property, not of full unlinkability.</p>
+        ${explainer(
+          'How accountable anonymity is built',
+          `<p>The manager issues a <strong>credential</strong>: an ECDSA signature over the member's public key. To sign a message, the member signs it with their own key and attaches that credential. A verifier checks two things — the manager's signature proves "a manager admitted this key", and the member's signature proves "the holder of that key approved this message" — without learning the member's real-world identity.</p>
+           <p>The manager keeps a private registry mapping each credential to an identity, so <em>only</em> the manager can <strong>open</strong> a signature and name the signer. Compare with Exhibit 1: a ring signature has no manager and no opener — anonymity there is unconditional, whereas a group signature deliberately keeps an accountability backdoor.</p>`
+        )}
       </section>
 
       <section class="panel" aria-labelledby="ex5-title">
@@ -421,6 +571,21 @@ const render = (): void => {
     }
   });
 
+  const wireTamper = (selector: string, kind: TamperKind): void => {
+    document.querySelector<HTMLButtonElement>(selector)?.addEventListener('click', async () => {
+      try {
+        state.error = null;
+        await runExhibit1Tamper(kind);
+        render();
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : String(error);
+        render();
+      }
+    });
+  };
+  wireTamper('#ex1-tamper-response', 'response');
+  wireTamper('#ex1-tamper-message', 'message');
+
   const ex2MessageA = document.querySelector<HTMLInputElement>('#ex2-message-a');
   ex2MessageA?.addEventListener('input', (event) => {
     const target = event.target as HTMLInputElement;
@@ -443,13 +608,6 @@ const render = (): void => {
       state.error = error instanceof Error ? error.message : String(error);
       render();
     }
-  });
-
-  const ex3Slider = document.querySelector<HTMLInputElement>('#ex3-size');
-  ex3Slider?.addEventListener('input', async (event) => {
-    const target = event.target as HTMLInputElement;
-    await setupRing(Number.parseInt(target.value, 10));
-    render();
   });
 
   const ex3Run = document.querySelector<HTMLButtonElement>('#ex3-run');
