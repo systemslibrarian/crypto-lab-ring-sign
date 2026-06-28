@@ -1,7 +1,5 @@
 # crypto-lab-ring-sign
 
-[![crypto-lab portfolio](https://img.shields.io/badge/crypto--lab-portfolio-blue?style=flat-square)](https://systemslibrarian.github.io/crypto-lab/)
-
 ## What It Is
 This demo compares two anonymous-authentication models: LSAG-style ring signatures and manager-issued group signatures. In the code, ring members are built from WebCrypto Ed25519 keys and verified with real Ed25519 curve arithmetic, while the group-signature exhibit uses P-256 ECDSA credentials issued by a manager. The problem being illustrated is how to prove membership in a set without publicly revealing which specific member acted. The security model differs by primitive: ring signatures provide signer ambiguity with linkability through key images, while the group flow adds manager-controlled opening for accountability.
 
@@ -10,10 +8,11 @@ This demo compares two anonymous-authentication models: LSAG-style ring signatur
 - Use it to demonstrate key-image-based double-spend detection, because the same signer secret yields the same linkable key image across repeated spends.
 - Use it to compare anonymous authorization models, because the group-signature exhibit shows what changes when a manager can issue credentials and later open a signature.
 - Use it to discuss anonymity-set tradeoffs, because the ring-size timing exhibit makes the privacy-versus-cost relationship visible with real measurements.
-- Do not use it as a production wallet or enterprise group-signature implementation, because the group exhibit is a teaching model built from manager-issued P-256 credentials rather than a standardized deployable group-signature scheme.
+- Do NOT use it as a production wallet or enterprise group-signature implementation, because the group exhibit is a teaching model built from manager-issued P-256 credentials rather than a standardized deployable group-signature scheme.
 
 ## Live Demo
-Live demo: https://systemslibrarian.github.io/crypto-lab-ring-sign/
+
+**[systemslibrarian.github.io/crypto-lab-ring-sign](https://systemslibrarian.github.io/crypto-lab-ring-sign/)**
 
 The page lets users choose ring size, select a hidden signer, generate LSAG signatures, and inspect the actual responses the verifier sees — making it concrete that every member's response is a uniform scalar, so the real signer is indistinguishable. A "try to break it" control corrupts a response or the message and shows verification reject it, because the challenge chain no longer closes at `c0`. A timing sweep charts signing versus verification cost across every ring size so the linear privacy-versus-cost tradeoff is visible as a curve. Each exhibit carries a collapsible "how it works" explainer. The group-signature section issues credentials, signs anonymously, and opens through the manager flow, with an explicit note about which anonymity property the teaching model does and does not provide.
 
@@ -29,5 +28,25 @@ The page lets users choose ring size, select a hidden signer, generate LSAG sign
 - MobileCoin: uses ring-signature-based transaction privacy to hide which member of an input set authorized a spend.
 - Intel EPID: uses a group-signature system so devices can attest membership anonymously while allowing issuer-controlled revocation and management.
 - TPM Direct Anonymous Attestation: uses a group-signature-style attestation model so a TPM can prove valid membership without revealing a unique device identity to every verifier.
+
+## How to Run Locally
+
+```bash
+git clone https://github.com/systemslibrarian/crypto-lab-ring-sign
+cd crypto-lab-ring-sign
+npm install
+npm run dev
+```
+
+## Related Demos
+- [crypto-lab-blind-sign](https://systemslibrarian.github.io/crypto-lab-blind-sign/) — blind signatures and unlinkability, a neighboring privacy-preserving signature primitive.
+- [crypto-lab-ed25519-forge](https://systemslibrarian.github.io/crypto-lab-ed25519-forge/) — the Ed25519/EdDSA signatures and cofactor details the LSAG ring is built from.
+- [crypto-lab-pairing-gate](https://systemslibrarian.github.io/crypto-lab-pairing-gate/) — BLS signature aggregation, another way to combine signers into one signature.
+- [crypto-lab-frost-threshold](https://systemslibrarian.github.io/crypto-lab-frost-threshold/) — FROST threshold Ed25519 signing, group-authorized signatures with a different trust model.
+- [crypto-lab-bulletproofs](https://systemslibrarian.github.io/crypto-lab-bulletproofs/) — range proofs as used alongside ring signatures in Monero-style confidential transactions.
+
+---
+
+*One of 60+ browser demos in the [Crypto Lab](https://crypto-lab.systemslibrarian.dev/) suite.*
 
 *"So whether you eat or drink or whatever you do, do it all for the glory of God." — 1 Corinthians 10:31*
