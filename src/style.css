@@ -5,6 +5,7 @@
    ============================================ */
 
 [data-theme='dark'] {
+  color-scheme: dark;
   --bg: #0b1418;
   --panel: rgba(13, 25, 31, 0.88);
   --panel-soft: rgba(20, 36, 43, 0.92);
@@ -20,6 +21,7 @@
 }
 
 [data-theme='light'] {
+  color-scheme: light;
   --bg: #f0f6f9;
   --panel: rgba(255, 255, 255, 0.96);
   --panel-soft: rgba(242, 248, 250, 0.97);
@@ -47,6 +49,10 @@
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  /* Own background-color so WebKit does not promote body's background to the
+     canvas and report body as transparent (axe would then assume a white page
+     and flag all dark-theme text). */
+  background-color: var(--bg);
 }
 
 body {
@@ -273,11 +279,26 @@ button {
   font-size: 1rem;
   border: 1px solid var(--line);
   border-radius: 0.65rem;
-  background: var(--panel-soft);
+  background-color: var(--panel-soft);
   color: var(--text);
   /* 44px minimum touch target height (WCAG 2.5.8) */
   min-height: 2.75rem;
   padding: 0.45rem 0.6rem;
+}
+
+/* Style the select in the author path so WebKit does not fall back to its UA
+   rendering (which ignores author `color` and paints black-on-dark → axe
+   reports a contrast failure). appearance:none + a custom chevron. */
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  padding-right: 2rem;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text) 50%),
+    linear-gradient(135deg, var(--text) 50%, transparent 50%);
+  background-position: right 1.05rem center, right 0.75rem center;
+  background-size: 0.35rem 0.35rem, 0.35rem 0.35rem;
+  background-repeat: no-repeat;
 }
 
 output {
