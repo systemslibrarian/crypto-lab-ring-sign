@@ -320,16 +320,17 @@ const render = (): void => {
 
   app.innerHTML = `
     <main class="shell" id="main-content" role="main">
-      <header class="hero">
-        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="${toggle.label}" title="${toggle.label}">${toggle.icon}</button>
-        <p class="eyebrow">systemslibrarian · crypto-lab</p>
-        <h1>Ring Signatures and Group Signatures</h1>
-        <p class="hero-text">Interactive cryptography lab showing how a verifier can confirm group membership without learning which specific member signed.</p>
-        <div class="hero-chips">
-          <span class="chip">Ed25519 LSAG</span>
-          <span class="chip">P-256 Group Manager</span>
-          <span class="chip">Monero Privacy Context</span>
+      <header class="cl-hero">
+        <div class="cl-hero-main">
+          <h1 class="cl-hero-title">Ring Signatures</h1>
+          <p class="cl-hero-sub">LSAG · key-image linkable · vs. group signatures</p>
+          <p class="cl-hero-desc">Sign a message as one of several ring members and watch the verifier confirm the signature closes without learning which member signed — then reuse a key to expose the linkable key image and contrast it with an openable group signature.</p>
         </div>
+        <aside class="cl-hero-why" aria-label="Why it matters">
+          <span class="cl-hero-why-label">WHY IT MATTERS</span>
+          <p class="cl-hero-why-text">Ring signatures give Monero-style spend privacy: membership is provable, the signer stays hidden. Key images stop double-spends without breaking anonymity, and group signatures show the opposite trade — anonymity a manager can revoke.</p>
+        </aside>
+        <button id="theme-toggle" class="theme-toggle" type="button" hidden aria-hidden="true" aria-label="${toggle.label}" title="${toggle.label}">${toggle.icon}</button>
       </header>
 
       ${state.error ? `<section class="panel error" role="alert" aria-live="assertive">${state.error}</section>` : ''}
