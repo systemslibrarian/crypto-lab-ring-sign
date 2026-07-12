@@ -1,4 +1,4 @@
-import { ed25519 } from '@noble/curves/ed25519.js';
+import { ed25519, ed25519_hasher } from '@noble/curves/ed25519.js';
 
 const CURVE_ORDER = ed25519.Point.Fn.ORDER;
 const BASE = ed25519.Point.BASE;
@@ -93,9 +93,28 @@ const hashToScalar = async (...chunks: Uint8Array[]): Promise<bigint> => {
   return mod(BigInt(`0x${bytesToHex(new Uint8Array(digest))}`));
 };
 
-const hashPoint = async (point: typeof BASE): Promise<typeof BASE> => {
-  const h = await hashToScalar(point.toBytes());
-  return BASE.multiply(h === 0n ? 1n : h);
+// Domain-separation tag for the hash-to-curve used to derive H_p(P).
+// Distinct from the challenge hash so the two oracles never collide.
+const HASH_TO_POINT_DST = 'crypto-lab-ring-sign:LSAG:H2P:v1';
+
+// Map a ring member's public key to an independent curve point H_p(P) whose
+// discrete log to the base point is UNKNOWN. This is the security-critical part
+// of LSAG: the key image I = x·H_p(P) must not be recomputable from public data.
+//
+// A previous version computed H_p(P) = G·SHA512(P), i.e. H_p(P) = h·G with a
+// publicly known scalar h. That let ANYONE deanonymize the signer by testing
+// h_k·P_k == I for each ring member P_k, since I = x·h·G = h·(x·G) = h·P.
+//
+// We now use RFC 9380 hash-to-curve (Elligator2 / edwards25519_XMD:SHA-512_ELL2_RO_)
+// so H_p(P) is a uniformly random point of the prime-order subgroup with no
+// exploitable relation to G. The result lands on the same edwards25519 curve as
+// the base point and ring public keys, so the LSAG arithmetic stays consistent.
+const hashPoint = (point: typeof BASE): typeof BASE => {
+  const dst = utf8(HASH_TO_POINT_DST);
+  const hp = ed25519_hasher.hashToCurve(point.toBytes(), { DST: dst }) as typeof BASE;
+  // Work in the prime-order subgroup so key images are torsion-free by
+  // construction (verifyLsag also rejects any torsion component defensively).
+  return hp.clearCofactor();
 };
 
 const challengeFor = async (
@@ -149,8 +168,8 @@ export const generateRingMembers = async (ringSize: number): Promise<RingKeyPair
 export const getPublicRing = (members: RingKeyPair[]): RingMemberPublic[] =>
   members.map((m) => ({ id: m.id, publicKeyHex: m.publicKeyHex }));
 
-const keyImageFromSecret = async (secretScalar: bigint, publicPoint: typeof BASE): Promise<typeof BASE> => {
-  const hp = await hashPoint(publicPoint);
+const keyImageFromSecret = (secretScalar: bigint, publicPoint: typeof BASE): typeof BASE => {
+  const hp = hashPoint(publicPoint);
   return hp.multiply(secretScalar);
 };
 
@@ -166,9 +185,9 @@ export const signLsag = async (
 
   const n = members.length;
   const pubPoints = members.map((m) => pointFromHex(m.publicKeyHex));
-  const hpPoints = await Promise.all(pubPoints.map((p) => hashPoint(p)));
+  const hpPoints = pubPoints.map((p) => hashPoint(p));
   const secret = hexToScalar(members[signerIndex].secretScalarHex);
-  const keyImage = await keyImageFromSecret(secret, pubPoints[signerIndex]);
+  const keyImage = keyImageFromSecret(secret, pubPoints[signerIndex]);
 
   const c = new Array<bigint>(n).fill(0n);
   const s = new Array<bigint>(n).fill(0n);
@@ -220,7 +239,7 @@ export const verifyLsag = async (message: string, signature: LsagSignature): Pro
   if (pubPoints.some((p) => p.isSmallOrder() || !p.isTorsionFree())) {
     return false;
   }
-  const hpPoints = await Promise.all(pubPoints.map((p) => hashPoint(p)));
+  const hpPoints = pubPoints.map((p) => hashPoint(p));
 
   let c = c0;
   for (let i = 0; i < pubPoints.length; i += 1) {
@@ -238,7 +257,7 @@ export const reconstructChallengeChain = async (
 ): Promise<string[]> => {
   const keyImage = pointFromHex(signature.keyImageHex);
   const pubPoints = signature.ring.map((m) => pointFromHex(m.publicKeyHex));
-  const hpPoints = await Promise.all(pubPoints.map((p) => hashPoint(p)));
+  const hpPoints = pubPoints.map((p) => hashPoint(p));
   const chain: string[] = [];
   let c = hexToScalar(signature.c0Hex);
   chain.push(scalarToHex(c));
