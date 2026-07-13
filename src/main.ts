@@ -40,6 +40,9 @@ type TamperKind = 'response' | 'message';
 type TamperResult = {
   kind: TamperKind;
   verified: boolean;
+  // The chain the verifier actually recomputes from the tampered inputs.
+  // Its last entry no longer equals c0, so the loop visibly fails to close.
+  chain: string[];
 };
 
 type GroupState = {
@@ -60,7 +63,10 @@ const state: {
   ex1Verified: boolean;
   ex1Chain: string[];
   ex1ActiveStep: number;
+  ex1ChainClosed: boolean;
   ex1Tamper: TamperResult | null;
+  ex1RevealSigner: boolean;
+  ex1VerifierView: boolean;
   ex2MessageA: string;
   ex2MessageB: string;
   ex2Result: {
@@ -68,6 +74,7 @@ const state: {
     keyImageB: string;
     reused: boolean;
   } | null;
+  ex2Ledger: { image: string; label: string; accepted: boolean }[];
   ex3Curve: PerfSample[];
   ex3Busy: boolean;
   group: GroupState;
@@ -82,10 +89,14 @@ const state: {
   ex1Verified: false,
   ex1Chain: [],
   ex1ActiveStep: -1,
+  ex1ChainClosed: false,
   ex1Tamper: null,
+  ex1RevealSigner: false,
+  ex1VerifierView: false,
   ex2MessageA: 'Spend output #a1',
   ex2MessageB: 'Spend output #a1 again',
   ex2Result: null,
+  ex2Ledger: [],
   ex3Curve: [],
   ex3Busy: false,
   group: {
@@ -127,14 +138,24 @@ const themeMeta = (theme: ThemeMode): { icon: string; label: string } =>
     ? { icon: '🌙', label: 'Switch to light mode' }
     : { icon: '☀️', label: 'Switch to dark mode' };
 
-const animateChallengeChain = async (chain: string[]): Promise<void> => {
-  state.ex1ActiveStep = 0;
+// Walk the challenge chain one edge at a time. ex1ActiveStep counts edges:
+// step i lights the edge leaving node i (deriving c_{i+1} from c_i). After the
+// last edge the walk lands back on node 0; ex1ChainClosed then controls whether
+// the "chain closed: c_n == c0" connector/badge is drawn.
+const animateChallengeChain = async (): Promise<void> => {
+  const n = state.members.length;
+  state.ex1ChainClosed = false;
+  state.ex1ActiveStep = -1;
   render();
-  for (let i = 0; i < chain.length; i += 1) {
+  for (let i = 0; i < n; i += 1) {
     state.ex1ActiveStep = i;
     render();
-    await new Promise((resolve) => setTimeout(resolve, 280));
+    await new Promise((resolve) => setTimeout(resolve, 300));
   }
+  // The walk has returned to node 0; snap the closing connector shut.
+  state.ex1ChainClosed = true;
+  render();
+  await new Promise((resolve) => setTimeout(resolve, 200));
 };
 
 const setupRing = async (ringSize: number): Promise<void> => {
@@ -145,7 +166,9 @@ const setupRing = async (ringSize: number): Promise<void> => {
   state.ex1Verified = false;
   state.ex1Chain = [];
   state.ex1ActiveStep = -1;
+  state.ex1ChainClosed = false;
   state.ex1Tamper = null;
+  state.ex1RevealSigner = false;
   state.ex2Result = null;
 };
 
@@ -173,7 +196,8 @@ const runExhibit1 = async (): Promise<void> => {
   state.ex1Verified = verified;
   state.ex1Chain = chain;
   state.ex1Tamper = null;
-  await animateChallengeChain(chain);
+  state.ex1RevealSigner = false;
+  await animateChallengeChain();
 };
 
 const safeVerify = async (message: string, signature: LsagSignature): Promise<boolean> => {
@@ -185,31 +209,71 @@ const safeVerify = async (message: string, signature: LsagSignature): Promise<bo
   }
 };
 
+const safeReconstruct = async (
+  message: string,
+  signature: LsagSignature
+): Promise<string[]> => {
+  try {
+    return await reconstructChallengeChain(message, signature);
+  } catch {
+    return [];
+  }
+};
+
 const runExhibit1Tamper = async (kind: TamperKind): Promise<void> => {
   if (!state.ex1Signature) {
     return;
   }
   let verified: boolean;
+  let chain: string[];
   if (kind === 'message') {
     // Same signature, but the verifier checks a different message than was signed.
-    verified = await safeVerify(`${state.ex1Message} (modified)`, state.ex1Signature);
+    const modified = `${state.ex1Message} (modified)`;
+    verified = await safeVerify(modified, state.ex1Signature);
+    // Reconstruct against the intact ring but the changed message: because the
+    // challenge is hashed over the message, every c_i shifts and the loop misses c0.
+    const rebound: LsagSignature = { ...state.ex1Signature, message: modified };
+    chain = await safeReconstruct(modified, rebound);
   } else {
     // Flip one byte of a response so the challenge chain no longer closes at c0.
     const corrupted = tamperLsagSignature(state.ex1Signature, 'response');
     verified = await safeVerify(state.ex1Message, corrupted);
+    chain = await safeReconstruct(state.ex1Message, corrupted);
   }
-  state.ex1Tamper = { kind, verified };
+  state.ex1Tamper = { kind, verified, chain };
+  // Show the broken walk in the ring: light every edge, but leave it un-closed.
+  state.ex1Chain = chain.length > 0 ? chain : state.ex1Chain;
+  state.ex1ActiveStep = state.members.length - 1;
+  state.ex1ChainClosed = false;
+};
+
+// A ledger records every key image a "network node" has already accepted. A
+// second spend with the same image is rejected as a double-spend — the payoff
+// of linkability — while the ring still hides WHICH member produced it.
+const ledgerSubmit = (image: string, label: string): boolean => {
+  const alreadySpent = state.ex2Ledger.some((e) => e.image === image && e.accepted);
+  const accepted = !alreadySpent;
+  state.ex2Ledger.push({ image, label, accepted });
+  return accepted;
 };
 
 const runExhibit2 = async (): Promise<void> => {
   const a = await signLsag(state.ex2MessageA, state.members, state.signerIndex);
   const b = await signLsag(state.ex2MessageB, state.members, state.signerIndex);
   const reuse = detectKeyImageReuse([a.keyImageHex, b.keyImageHex]);
+  // Push both signings at the ledger in order; the second (same image) is rejected.
+  ledgerSubmit(a.keyImageHex, state.ex2MessageA);
+  ledgerSubmit(b.keyImageHex, state.ex2MessageB);
   state.ex2Result = {
     keyImageA: a.keyImageHex,
     keyImageB: b.keyImageHex,
     reused: reuse.reused
   };
+};
+
+const resetLedger = (): void => {
+  state.ex2Ledger = [];
+  state.ex2Result = null;
 };
 
 const RING_SIZES = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
@@ -273,24 +337,152 @@ const runExhibit4Open = (): void => {
   state.group.openedMember = openGroupSignature(state.group.manager, state.group.latestSignature);
 };
 
+const RING_RADIUS = 39;
+
+const ringNodePos = (idx: number, count: number): { x: number; y: number } => {
+  const angle = (idx / count) * Math.PI * 2 - Math.PI / 2;
+  return {
+    x: 50 + RING_RADIUS * Math.cos(angle),
+    y: 50 + RING_RADIUS * Math.sin(angle)
+  };
+};
+
+// SVG layer of directed edges c_i → c_{i+1} that light as the walk proceeds and,
+// when the loop returns, snaps a distinct "closing" edge from the last node back
+// to node 0. On tamper the closing edge is drawn as a broken (dashed) connector.
+const ringEdges = (): string => {
+  const n = state.members.length;
+  if (n < 2) {
+    return '';
+  }
+  const tampered = state.ex1Tamper !== null;
+  const walking = state.ex1ActiveStep >= 0;
+  const segments: string[] = [];
+  for (let i = 0; i < n; i += 1) {
+    const from = ringNodePos(i, n);
+    const to = ringNodePos((i + 1) % n, n);
+    const isClosing = (i + 1) % n === 0; // edge that returns to node 0
+    // An edge is "lit" once the walk has reached or passed its source node.
+    const lit = walking && state.ex1ActiveStep >= i;
+    const closed = isClosing && state.ex1ChainClosed && !tampered;
+    const brokenClose = isClosing && tampered;
+    const classes = [
+      'ring-edge',
+      isClosing ? 'ring-edge-closing' : '',
+      lit ? 'ring-edge-lit' : '',
+      closed ? 'ring-edge-closed' : '',
+      brokenClose ? 'ring-edge-broken' : ''
+    ]
+      .filter(Boolean)
+      .join(' ');
+    segments.push(
+      `<line class="${classes}" x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" />`
+    );
+  }
+  return `<svg class="ring-edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">${segments.join('')}</svg>`;
+};
+
 const ringVisual = (): string => {
-  const radius = 39;
+  // In verifier's view the privileged signer highlight is hidden — the whole
+  // point is that a verifier cannot see it. In your view it is shown.
+  const showSigner = !state.ex1VerifierView && state.ex1RevealSigner;
   return state.members
     .map((member, idx) => {
-      const angle = (idx / state.members.length) * Math.PI * 2 - Math.PI / 2;
-      const x = 50 + radius * Math.cos(angle);
-      const y = 50 + radius * Math.sin(angle);
+      const { x, y } = ringNodePos(idx, state.members.length);
       const active = state.ex1ActiveStep === idx || state.ex1ActiveStep === idx + 1;
+      const isSigner = idx === state.signerIndex;
       const classes = [
         'ring-node',
-        idx === state.signerIndex ? 'ring-node-signer' : '',
-        active ? 'ring-node-active' : ''
-      ].join(' ');
-      return `<div class="${classes}" style="left:${x}%;top:${y}%" title="${member.id}" role="listitem" aria-label="${member.id}${idx === state.signerIndex ? ' (selected signer)' : ''}${active ? ', challenge active' : ''}">
+        showSigner && isSigner ? 'ring-node-signer' : '',
+        active ? 'ring-node-active' : '',
+        idx === 0 ? 'ring-node-start' : ''
+      ]
+        .filter(Boolean)
+        .join(' ');
+      const signerLabel = showSigner && isSigner ? ' (actual signer, revealed to you only)' : '';
+      const startLabel = idx === 0 ? ', challenge start c0' : '';
+      return `<div class="${classes}" style="left:${x}%;top:${y}%" title="${member.id}" role="img" aria-label="Ring member ${member.id}${signerLabel}${startLabel}${active ? ', challenge active' : ''}">
         <span aria-hidden="true">${member.id}</span>
       </div>`;
     })
     .join('');
+};
+
+// A real line/scatter plot: ring size on the x-axis, milliseconds on the y-axis,
+// two overlaid series (sign, verify), plus a faint linear reference line fitted
+// through the origin and the largest sign sample so O(n) growth is legible.
+const scatterPlot = (samples: PerfSample[]): string => {
+  if (samples.length === 0) {
+    return '';
+  }
+  // viewBox space; plot area inset for axis labels.
+  const W = 320;
+  const H = 200;
+  const padL = 34;
+  const padR = 8;
+  const padT = 10;
+  const padB = 26;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const sizes = samples.map((s) => s.ringSize);
+  const minX = Math.min(...sizes, 2);
+  const maxX = Math.max(...sizes, 3);
+  const maxY = Math.max(...samples.map((s) => Math.max(s.signMs, s.verifyMs))) * 1.1 || 1;
+
+  const xOf = (ring: number): number =>
+    padL + ((ring - minX) / (maxX - minX || 1)) * plotW;
+  const yOf = (ms: number): number => padT + plotH - (ms / maxY) * plotH;
+
+  const line = (series: 'sign' | 'verify'): string =>
+    samples
+      .map((s) => `${xOf(s.ringSize).toFixed(1)},${yOf(series === 'sign' ? s.signMs : s.verifyMs).toFixed(1)}`)
+      .join(' ');
+
+  const dots = (series: 'sign' | 'verify'): string =>
+    samples
+      .map((s) => {
+        const cy = yOf(series === 'sign' ? s.signMs : s.verifyMs);
+        return `<circle class="dot dot-${series}" cx="${xOf(s.ringSize).toFixed(1)}" cy="${cy.toFixed(1)}" r="2.6" />`;
+      })
+      .join('');
+
+  // Linear reference: straight line from (minX, sign@minX) to (maxX, sign@maxX)
+  // scaled so a purely O(n) cost would lie on it. Using the first and last sign
+  // samples keeps it honest to the measured data rather than an invented slope.
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const refX1 = xOf(first.ringSize);
+  const refY1 = yOf(first.signMs);
+  const refX2 = xOf(last.ringSize);
+  const refY2 = yOf(last.signMs);
+
+  // Y gridlines / ticks.
+  const yTicks = [0, 0.5, 1].map((f) => {
+    const ms = maxY * f;
+    const y = yOf(ms);
+    return `<line class="grid" x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" /><text class="axis-tick" x="${padL - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end">${ms.toFixed(1)}</text>`;
+  });
+  const xTicks = samples
+    .filter((_, i) => i % 2 === 0 || i === samples.length - 1)
+    .map((s) => {
+      const x = xOf(s.ringSize);
+      return `<text class="axis-tick" x="${x.toFixed(1)}" y="${H - padB + 14}" text-anchor="middle">${s.ringSize}</text>`;
+    });
+
+  return `<svg class="scatter" viewBox="0 0 ${W} ${H}" role="img" aria-label="Line chart of average sign and verify time in milliseconds versus ring size ${minX} to ${maxX}. Both series rise roughly linearly and track the dashed linear reference line.">
+    ${yTicks.join('')}
+    <line class="axis" x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}" />
+    <line class="axis" x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}" />
+    ${xTicks.join('')}
+    <text class="axis-title" x="${padL + plotW / 2}" y="${H - 2}" text-anchor="middle">ring size (anonymity set)</text>
+    <text class="axis-title" x="10" y="${padT + plotH / 2}" text-anchor="middle" transform="rotate(-90 10 ${padT + plotH / 2})">ms</text>
+    <line class="ref-line" x1="${refX1.toFixed(1)}" y1="${refY1.toFixed(1)}" x2="${refX2.toFixed(1)}" y2="${refY2.toFixed(1)}" />
+    <polyline class="series series-verify" points="${line('verify')}" />
+    <polyline class="series series-sign" points="${line('sign')}" />
+    ${dots('verify')}
+    ${dots('sign')}
+  </svg>`;
 };
 
 const render = (): void => {
@@ -302,21 +494,7 @@ const render = (): void => {
   const group = state.group;
   const compareLine = isRingVsGroupSummary();
 
-  const maxMs = ex3Curve.reduce((m, s) => Math.max(m, s.signMs, s.verifyMs), 0) || 1;
-  const ex3ChartHtml = ex3Curve
-    .map((s) => {
-      const signW = Math.max(3, (s.signMs / maxMs) * 100);
-      const verifyW = Math.max(3, (s.verifyMs / maxMs) * 100);
-      return `<div class="curve-row" role="listitem" aria-label="Ring size ${s.ringSize}: sign ${s.signMs.toFixed(2)} milliseconds, verify ${s.verifyMs.toFixed(2)} milliseconds">
-        <span class="curve-size">ring ${s.ringSize}</span>
-        <span class="curve-bars" aria-hidden="true">
-          <span class="bar bar-sign" style="width:${signW}%"></span>
-          <span class="bar bar-verify" style="width:${verifyW}%"></span>
-        </span>
-        <span class="curve-val" aria-hidden="true">${s.signMs.toFixed(1)} / ${s.verifyMs.toFixed(1)} ms</span>
-      </div>`;
-    })
-    .join('');
+  const ex3ChartHtml = scatterPlot(ex3Curve);
 
   app.innerHTML = `
     <main class="shell" id="main-content" role="main">
@@ -334,6 +512,33 @@ const render = (): void => {
       </header>
 
       ${state.error ? `<section class="panel error" role="alert" aria-live="assertive">${state.error}</section>` : ''}
+
+      <section class="panel preamble" aria-labelledby="preamble-title">
+        <div class="panel-head">
+          <h2 id="preamble-title">Start Here — The Words You'll Meet</h2>
+          <span class="badge" aria-hidden="true">Plain language first</span>
+        </div>
+        <p class="preamble-lede">Picture a signed note passed hand to hand around a circle of suspects. Anyone can check the note is genuine, but no outsider can tell whose hand actually wrote it. That circle is the <em>ring</em>, and this lab builds it for real with Ed25519 curve math. Four words to carry with you:</p>
+        <dl class="glossary">
+          <div class="glossary-item">
+            <dt>Ring</dt>
+            <dd>The set of possible signers — the real one plus decoys. The signature proves <em>someone in the ring</em> signed, nothing narrower.</dd>
+          </div>
+          <div class="glossary-item">
+            <dt>Decoy</dt>
+            <dd>A ring member whose public key is borrowed for cover. They did nothing, but the math treats them as an equally plausible signer.</dd>
+          </div>
+          <div class="glossary-item">
+            <dt>Challenge chain</dt>
+            <dd>A loop of values <code>c0 → c1 → … → c0</code>. The signer rigs it so it comes full circle back to where it started; if it doesn't close, the signature is fake.</dd>
+          </div>
+          <div class="glossary-item">
+            <dt>Key image</dt>
+            <dd>A fingerprint <code>I = x·H(P)</code> tied to the secret key. It never names the signer, but the <em>same</em> signer always produces the <em>same</em> image — which is how double-spends get caught.</dd>
+          </div>
+        </dl>
+        <p class="preamble-foot">A "<em>scalar</em>" below just means a number modulo the curve order — the raw material every response is made of. "<em>LSAG</em>" is the specific ring-signature recipe (Linkable Spontaneous Anonymous Group) this lab implements.</p>
+      </section>
 
       <section class="panel" aria-labelledby="ex1-title">
         <div class="panel-head">
@@ -356,30 +561,69 @@ const render = (): void => {
           </label>
           <button id="ex1-run" type="button">Sign and Verify</button>
         </fieldset>
-        <div class="ring-stage" role="list" aria-label="Visual ring showing ${state.members.length} members with challenge propagation">
+        <div class="view-switch" role="group" aria-label="Whose view of the ring to show">
+          <span class="view-switch-label" id="view-switch-label">Whose view:</span>
+          <button id="ex1-view-you" type="button" class="seg ${state.ex1VerifierView ? '' : 'seg-on'}" aria-pressed="${state.ex1VerifierView ? 'false' : 'true'}">Your view</button>
+          <button id="ex1-view-verifier" type="button" class="seg ${state.ex1VerifierView ? 'seg-on' : ''}" aria-pressed="${state.ex1VerifierView ? 'true' : 'false'}">Verifier's view</button>
+          <span class="view-switch-note">${state.ex1VerifierView ? 'The signer highlight is hidden — this is exactly what a verifier can see.' : 'The signer highlight is privileged information a verifier never has.'}</span>
+        </div>
+        <div class="ring-stage" role="group" aria-label="Visual ring showing ${state.members.length} members with the challenge chain walking edge by edge back to c0">
           <div class="ring-track"></div>
+          ${ringEdges()}
           ${ringVisual()}
+          ${
+            state.ex1ChainClosed && !state.ex1Tamper
+              ? '<span class="chain-badge chain-badge-ok" role="status">chain closed: c<sub>n</sub> == c0 ✓</span>'
+              : state.ex1Tamper
+                ? '<span class="chain-badge chain-badge-fail" role="status">chain broken: c<sub>n</sub> ≠ c0 ✗</span>'
+                : ''
+          }
         </div>
         <div class="info-grid" aria-live="polite" role="status">
           <p><strong>Verification:</strong> ${state.ex1Verified ? '<span class="ok">valid ring signature</span>' : '<span class="muted">no signature yet</span>'}</p>
           <p><strong>Signer clue to verifier:</strong> none (all members satisfy the challenge chain equation)</p>
-          <p><strong>Challenge chain:</strong> <span class="chain-wrap">${state.ex1Chain.length > 0 ? state.ex1Chain.map((c, i) => `<span class="chain ${state.ex1ActiveStep === i ? 'active' : ''}" aria-label="challenge ${i}">c${i}=${shortHex(c, 7, 5)}</span>`).join(' ') : 'run exhibit to animate'}</span></p>
+          <p><strong>Challenge chain (walks the loop, must return to c0):</strong> <span class="chain-wrap">${
+            state.ex1Chain.length > 0
+              ? state.ex1Chain
+                  .map((c, i) => {
+                    const isLast = i === state.ex1Chain.length - 1;
+                    const lit = state.ex1ActiveStep >= 0 && i <= state.ex1ActiveStep + 1;
+                    const closeOk = isLast && state.ex1ChainClosed && !state.ex1Tamper;
+                    const closeFail = isLast && (state.ex1Tamper !== null);
+                    const cls = ['chain', lit ? 'active' : '', closeOk ? 'chain-close-ok' : '', closeFail ? 'chain-close-fail' : ''].filter(Boolean).join(' ');
+                    const label = isLast ? `c${i} (should equal c0)` : `challenge ${i}`;
+                    return `<span class="${cls}" aria-label="${label}">c${i === state.ex1Chain.length - 1 ? 'ₙ' : i}=${shortHex(c, 7, 5)}</span>`;
+                  })
+                  .join(' <span class="chain-arrow" aria-hidden="true">→</span> ')
+              : 'run exhibit to animate'
+          }</span></p>
           <p><strong>Key image:</strong> <code class="hex-value">${latestSig ? shortHex(latestSig.keyImageHex, 16, 14) : 'not generated'}</code></p>
         </div>
 
         ${
           latestSig
             ? `<div class="responses">
-          <p class="responses-head"><strong>The ${latestSig.responsesHex.length} responses the verifier sees</strong> — one per ring member:</p>
+          <p class="responses-head"><strong>The ${latestSig.responsesHex.length} responses the verifier sees</strong> — one per ring member. <span class="challenge-q">Can you pick out which one was computed with the secret key?</span></p>
           <div class="response-grid" role="list" aria-label="Ring responses">
             ${latestSig.responsesHex
-              .map(
-                (s, i) =>
-                  `<span class="response-chip" role="listitem"><span class="response-label">s${i}</span><code>${shortHex(s, 6, 6)}</code></span>`
-              )
+              .map((s, i) => {
+                const isClosed = i === latestSig.signerIndex;
+                const marked = state.ex1RevealSigner && isClosed;
+                const cls = ['response-chip', marked ? 'response-chip-closed' : ''].filter(Boolean).join(' ');
+                const tag = marked ? ' <span class="closed-tag">closed with secret</span>' : '';
+                return `<span class="${cls}" role="listitem"><span class="response-label">s${i}</span><code>${shortHex(s, 6, 6)}</code>${tag}</span>`;
+              })
               .join('')}
           </div>
-          <p class="responses-note">Every response is a uniform scalar. You chose <strong>${state.members[state.signerIndex]?.id ?? '—'}</strong>, so the ring above highlights them — but the verifier only sees the data here, and the real signer's response is statistically identical to the rest.</p>
+          <div class="reveal-row">
+            <button id="ex1-reveal-signer" type="button" class="ghost" aria-pressed="${state.ex1RevealSigner ? 'true' : 'false'}">${state.ex1RevealSigner ? 'Hide the closed slot' : 'Reveal the closed slot'}</button>
+            <span class="reveal-note" role="status" aria-live="polite">${
+              state.ex1RevealSigner
+                ? `The secret closed <strong>s${latestSig.signerIndex}</strong> — but now that the hint is off again, it is indistinguishable from the rest. Could you have found it without the hint?`
+                : 'Try first: guess before you peek. The response computed with the secret is a uniform scalar just like every decoy, so statistically there is nothing to find.'
+            }</span>
+          </div>
+          <p class="responses-note">Every response is a uniform scalar. The verifier sees only the data here; the real signer's response is statistically identical to the rest, which is precisely why membership is provable but the signer stays hidden.</p>
         </div>
 
         <div class="tamper">
@@ -400,8 +644,8 @@ const render = (): void => {
                     : '<span class="ok">rejected</span>'
                 }${
                   state.ex1Tamper.kind === 'response'
-                    ? ' (the recomputed chain no longer returns to c0).'
-                    : ' (the challenge is hashed over the message, so any edit changes every challenge).'
+                    ? ' — watch the ring above: the walk still lights every edge, but the closing connector back to c0 is now dashed and red because the last challenge no longer equals c0.'
+                    : ' — the challenge is hashed over the message, so any edit changes every challenge and the loop above lands on a different value that fails to close.'
                 }</p>`
               : ''
           }
@@ -430,7 +674,8 @@ const render = (): void => {
           <label for="ex2-message-b">Message B
             <input id="ex2-message-b" type="text" value="${state.ex2MessageB}" />
           </label>
-          <button id="ex2-run" type="button">Sign Both With Same Member</button>
+          <button id="ex2-run" type="button">Submit Both Spends To The Ledger</button>
+          <button id="ex2-reset" type="button" class="ghost" ${state.ex2Ledger.length > 0 ? '' : 'disabled'}>Clear ledger</button>
         </fieldset>
         <div class="info-grid" aria-live="polite" role="status">
           <p><strong>Key image A:</strong> <code class="hex-value">${ex2 ? shortHex(ex2.keyImageA, 16, 14) : 'pending'}</code></p>
@@ -438,6 +683,29 @@ const render = (): void => {
           <p><strong>Reuse detected:</strong> ${ex2 ? (ex2.reused ? '<span class="danger" role="alert">yes — same signer secret reused</span>' : '<span class="ok">no</span>') : 'run exhibit'}</p>
           <p><strong>Monero context:</strong> key images allow network nodes to reject duplicate spends while preserving signer ambiguity.</p>
         </div>
+        ${
+          state.ex2Ledger.length > 0
+            ? `<div class="ledger">
+          <p class="ledger-head"><strong>Network ledger of spent key images</strong> — a node accepts each new image once and rejects any repeat:</p>
+          <ol class="ledger-list" aria-label="Ledger of submitted spends in order">
+            ${state.ex2Ledger
+              .map((e, i) => {
+                const statusText = e.accepted ? 'accepted (new key image)' : 'REJECTED double-spend (image already spent)';
+                const cls = e.accepted ? 'ledger-ok' : 'ledger-reject';
+                const icon = e.accepted ? '✓' : '✗';
+                return `<li class="ledger-row ${cls}">
+                  <span class="ledger-idx" aria-hidden="true">#${i + 1}</span>
+                  <code class="ledger-image">${shortHex(e.image, 12, 10)}</code>
+                  <span class="ledger-msg">${e.label}</span>
+                  <span class="ledger-status"><span aria-hidden="true">${icon}</span> ${statusText}</span>
+                </li>`;
+              })
+              .join('')}
+          </ol>
+          <p class="ledger-note">The rejected line proves the double-spend was caught — yet nothing in the ledger reveals <em>which</em> of the ${state.members.length} ring members signed. Linkability and anonymity hold at the same time.</p>
+        </div>`
+            : ''
+        }
         ${explainer(
           'Why the same signer always produces the same key image',
           `<p>The key image is <code>I = x · H(P)</code>, where <code>x</code> is the signer's secret key and <code>H(P)</code> is a hash of their public key mapped to a curve point. It does not depend on the message, so signing two different messages with the same secret yields the <em>same</em> key image.</p>
@@ -456,13 +724,15 @@ const render = (): void => {
         </fieldset>
         ${
           ex3Curve.length > 0
-            ? `<div class="curve" role="list" aria-label="Average sign and verify time by ring size">
+            ? `<figure class="curve">
                 <div class="curve-legend" aria-hidden="true">
                   <span><span class="swatch swatch-sign"></span>sign</span>
                   <span><span class="swatch swatch-verify"></span>verify</span>
+                  <span><span class="swatch swatch-ref"></span>linear reference</span>
                 </div>
                 ${ex3ChartHtml}
-              </div>`
+                <figcaption class="sr-only">Average sign and verify time in milliseconds plotted against ring size; both series rise roughly linearly.</figcaption>
+              </figure>`
             : '<p class="muted curve-empty">Run the sweep to chart how signing and verification cost scale with the anonymity set.</p>'
         }
         <div class="info-grid" aria-live="polite" role="status">
@@ -554,6 +824,20 @@ const render = (): void => {
     render();
   });
 
+  document.querySelector<HTMLButtonElement>('#ex1-view-you')?.addEventListener('click', () => {
+    state.ex1VerifierView = false;
+    render();
+  });
+  document.querySelector<HTMLButtonElement>('#ex1-view-verifier')?.addEventListener('click', () => {
+    state.ex1VerifierView = true;
+    render();
+  });
+
+  document.querySelector<HTMLButtonElement>('#ex1-reveal-signer')?.addEventListener('click', () => {
+    state.ex1RevealSigner = !state.ex1RevealSigner;
+    render();
+  });
+
   const ex1Message = document.querySelector<HTMLInputElement>('#ex1-message');
   ex1Message?.addEventListener('input', (event) => {
     const target = event.target as HTMLInputElement;
@@ -609,6 +893,11 @@ const render = (): void => {
       state.error = error instanceof Error ? error.message : String(error);
       render();
     }
+  });
+
+  document.querySelector<HTMLButtonElement>('#ex2-reset')?.addEventListener('click', () => {
+    resetLedger();
+    render();
   });
 
   const ex3Run = document.querySelector<HTMLButtonElement>('#ex3-run');
