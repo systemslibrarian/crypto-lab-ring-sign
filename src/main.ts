@@ -6,6 +6,7 @@ import {
   ringSignAndVerify,
   signLsag,
   tamperLsagSignature,
+  toVerifierView,
   verifyLsag,
   type LsagSignature,
   type RingKeyPair
@@ -15,11 +16,13 @@ import {
   groupSign,
   isRingVsGroupSummary,
   issueCredential,
+  linkageFromWire,
   openGroupSignature,
   verifyGroupSignature,
   type GroupCredential,
   type GroupManager,
-  type GroupSignature
+  type GroupSignature,
+  type PseudonymLinkage
 } from './group';
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -52,6 +55,8 @@ type GroupState = {
   latestSignature: GroupSignature | null;
   verified: boolean;
   openedMember: string | null;
+  history: GroupSignature[];
+  linkage: PseudonymLinkage | null;
 };
 
 const state: {
@@ -70,10 +75,13 @@ const state: {
   ex1VerifierView: boolean;
   ex2MessageA: string;
   ex2MessageB: string;
+  ex2SignerIndexB: number;
   ex2Result: {
     keyImageA: string;
     keyImageB: string;
     reused: boolean;
+    signerA: number;
+    signerB: number;
   } | null;
   ex2Ledger: { image: string; label: string; accepted: boolean }[];
   ex3Curve: PerfSample[];
@@ -97,6 +105,7 @@ const state: {
   ex1VerifierView: false,
   ex2MessageA: 'Spend output #a1',
   ex2MessageB: 'Spend output #a1 again',
+  ex2SignerIndexB: 1,
   ex2Result: null,
   ex2Ledger: [],
   ex3Curve: [],
@@ -107,7 +116,9 @@ const state: {
     selected: 0,
     latestSignature: null,
     verified: false,
-    openedMember: null
+    openedMember: null,
+    history: [],
+    linkage: null
   },
   groupMessage: 'Approve shielded settlement #42',
   error: null
@@ -199,7 +210,9 @@ const setupGroup = async (): Promise<void> => {
     selected: 0,
     latestSignature: null,
     verified: false,
-    openedMember: null
+    openedMember: null,
+    history: [],
+    linkage: null
   };
 };
 
@@ -275,16 +288,24 @@ const ledgerSubmit = (image: string, label: string): boolean => {
 };
 
 const runExhibit2 = async (): Promise<void> => {
+  // Spend B is signed by whoever the learner picked, which may or may not be
+  // the signer of spend A. Both signings used to use state.signerIndex, so
+  // detectKeyImageReuse could only ever return true and the "no reuse" branch
+  // below was unreachable — the ledger's REJECTED line was a foregone
+  // conclusion of control flow rather than a fact about the key images.
+  const signerB = Math.min(state.ex2SignerIndexB, state.members.length - 1);
   const a = await signLsag(state.ex2MessageA, state.members, state.signerIndex);
-  const b = await signLsag(state.ex2MessageB, state.members, state.signerIndex);
+  const b = await signLsag(state.ex2MessageB, state.members, signerB);
   const reuse = detectKeyImageReuse([a.keyImageHex, b.keyImageHex]);
-  // Push both signings at the ledger in order; the second (same image) is rejected.
+  // Push both signings at the ledger in order; a repeated image is rejected.
   ledgerSubmit(a.keyImageHex, state.ex2MessageA);
   ledgerSubmit(b.keyImageHex, state.ex2MessageB);
   state.ex2Result = {
     keyImageA: a.keyImageHex,
     keyImageB: b.keyImageHex,
-    reused: reuse.reused
+    reused: reuse.reused,
+    signerA: state.signerIndex,
+    signerB
   };
 };
 
@@ -345,6 +366,10 @@ const runExhibit4Sign = async (): Promise<void> => {
   state.group.latestSignature = signature;
   state.group.verified = verified;
   state.group.openedMember = null;
+  // Keep every signature a verifier has seen, so the readout can compute what a
+  // verifier can correlate rather than assert that it can correlate nothing.
+  state.group.history.push(signature);
+  state.group.linkage = linkageFromWire(signature, state.group.history);
 };
 
 const runExhibit4Open = (): void => {
@@ -560,6 +585,11 @@ const render = (): void => {
   const theme = getTheme();
   const toggle = themeMeta(theme);
   const latestSig = state.ex1Signature;
+  // Everything the page claims a verifier can see is rendered from this, which
+  // structurally lacks signerIndex. The privileged index is available only when
+  // the learner presses "Reveal the closed slot".
+  const wireView = latestSig ? toVerifierView(latestSig) : null;
+  const privilegedSignerIndex = latestSig && state.ex1RevealSigner ? latestSig.signerIndex : -1;
   const ex2 = state.ex2Result;
   const ex3Curve = state.ex3Curve;
   const group = state.group;
@@ -680,12 +710,14 @@ const render = (): void => {
         ${
           latestSig
             ? `<div class="responses">
-          <p class="responses-head"><strong>The ${latestSig.responsesHex.length} responses the verifier sees</strong> — one per ring member. <span class="challenge-q">Can you pick out which one was computed with the secret key?</span></p>
+          <p class="responses-head"><strong>The ${wireView!.responsesHex.length} responses the verifier sees</strong> — one per ring member. <span class="challenge-q">Can you pick out which one was computed with the secret key?</span></p>
           <div class="response-grid" role="list" aria-label="Ring responses">
-            ${latestSig.responsesHex
+            ${wireView!.responsesHex
               .map((s, i) => {
-                const isClosed = i === latestSig.signerIndex;
-                const marked = state.ex1RevealSigner && isClosed;
+                // `wireView` has no signerIndex to consult. The highlight is
+                // available only through `privilegedSignerIndex`, which is -1
+                // unless the learner presses the privileged reveal button.
+                const marked = i === privilegedSignerIndex;
                 const cls = ['response-chip', marked ? 'response-chip-closed' : ''].filter(Boolean).join(' ');
                 const tag = marked ? ' <span class="closed-tag">closed with secret</span>' : '';
                 return `<span class="${cls}" role="listitem"><span class="response-label">s${i}</span><code>${shortHex(s, 6, 6)}</code>${tag}</span>`;
@@ -700,7 +732,7 @@ const render = (): void => {
                 : 'Try first: guess before you peek. The response computed with the secret is a uniform scalar just like every decoy, so statistically there is nothing to find.'
             }</span>
           </div>
-          <p class="responses-note">Every response is a uniform scalar. The verifier sees only the data here; the real signer's response is statistically identical to the rest, which is precisely why membership is provable but the signer stays hidden.</p>
+          <p class="responses-note">Every response is a uniform scalar. This grid is rendered from the verifier's copy of the signature, whose fields are exactly <code>${Object.keys(wireView!).join(', ')}</code> — the prover-only <code>signerIndex</code> is stripped by <code>toVerifierView()</code> before anything here is drawn, and <code>verifyLsag()</code> never reads it either. The real signer's response is statistically identical to the rest, which is precisely why membership is provable but the signer stays hidden.</p>
         </div>
 
         <div class="tamper">
@@ -752,13 +784,28 @@ const render = (): void => {
           <label for="ex2-message-b">Message B
             <input id="ex2-message-b" type="text" value="${state.ex2MessageB}" />
           </label>
+          <label for="ex2-signer-b">Signer of spend B (spend A is signed by ${state.members[state.signerIndex]?.id ?? '—'})
+            <select id="ex2-signer-b">
+              ${state.members.map((m, i) => `<option value="${i}" ${i === Math.min(state.ex2SignerIndexB, state.members.length - 1) ? 'selected' : ''}>${m.id}${i === state.signerIndex ? ' (same signer)' : ''}</option>`).join('')}
+            </select>
+          </label>
           <button id="ex2-run" type="button">Submit Both Spends To The Ledger</button>
           <button id="ex2-reset" type="button" class="ghost" ${state.ex2Ledger.length > 0 ? '' : 'disabled'}>Clear ledger</button>
         </fieldset>
         <div class="info-grid" aria-live="polite" role="status">
           <p><strong>Key image A:</strong> <code class="hex-value">${ex2 ? shortHex(ex2.keyImageA, 16, 14) : 'pending'}</code></p>
           <p><strong>Key image B:</strong> <code class="hex-value">${ex2 ? shortHex(ex2.keyImageB, 16, 14) : 'pending'}</code></p>
-          <p><strong>Reuse detected:</strong> ${ex2 ? (ex2.reused ? '<span class="danger" role="alert">yes — same signer secret reused</span>' : '<span class="ok">no</span>') : 'run exhibit'}</p>
+          <p><strong>Reuse detected:</strong> ${
+            ex2
+              ? ex2.reused
+                ? '<span class="danger" role="alert">yes — the two key images are equal, so one secret signed both</span>'
+                : `<span class="ok">no — the two key images differ, so the ledger accepted both</span>`
+              : 'run exhibit'
+          }${
+            ex2
+              ? ` <span class="muted">(computed by comparing the images above; spend A signed by ${state.members[ex2.signerA]?.id ?? '?'}, spend B by ${state.members[ex2.signerB]?.id ?? '?'})</span>`
+              : ''
+          }</p>
           <p><strong>Monero context:</strong> key images allow network nodes to reject duplicate spends while preserving signer ambiguity.</p>
         </div>
         ${
@@ -780,7 +827,11 @@ const render = (): void => {
               })
               .join('')}
           </ol>
-          <p class="ledger-note">The rejected line proves the double-spend was caught — yet nothing in the ledger reveals <em>which</em> of the ${state.members.length} ring members signed. Linkability and anonymity hold at the same time.</p>
+          <p class="ledger-note">${
+            state.ex2Ledger.some((e) => !e.accepted)
+              ? `The rejected line proves the double-spend was caught — yet nothing in the ledger reveals <em>which</em> of the ${state.members.length} ring members signed. Linkability and anonymity hold at the same time.`
+              : `Every submission was accepted: no two key images in this ledger are equal, so the node saw no double-spend. Point spend B at the same signer as spend A and resubmit to make the rejection happen.`
+          }</p>
         </div>`
             : ''
         }
@@ -847,7 +898,15 @@ const render = (): void => {
         </fieldset>
         <div class="info-grid" aria-live="polite" role="status">
           <p><strong>Verifier result:</strong> ${group.verified ? '<span class="ok">valid group credential + member signature</span>' : '<span class="muted">no signature yet</span>'}</p>
-          <p><strong>Signer identity to verifier:</strong> hidden (only sees manager-issued credential proof)</p>
+          <p><strong>Signer identity to verifier:</strong> ${
+            group.linkage
+              ? `real-world name hidden — the registry that maps credentials to people is the manager's. But the signature is <strong>pseudonymous, not anonymous</strong>: it carries credential <code>${group.linkage.pseudonym}</code> and the member's public key in the clear. Signatures collected in this session: ${group.history.length} across ${group.linkage.distinctSigners} distinct signer${group.linkage.distinctSigners === 1 ? '' : 's'}; <strong>${group.linkage.linkedCount}</strong> of them share this pseudonym${
+                  group.linkage.stableFields.length > 0
+                    ? `, linked by the fields <code>${group.linkage.stableFields.join(', ')}</code>, which were byte-identical across every one of them`
+                    : ''
+                }. Any verifier can do that grouping; no manager needed.`
+              : 'no signature yet'
+          }</p>
           <p><strong>Manager open result:</strong> ${group.openedMember ?? 'not opened yet'}</p>
           <p><strong>Ring vs Group:</strong> ${compareLine}</p>
         </div>
@@ -969,6 +1028,12 @@ const render = (): void => {
   ex2MessageB?.addEventListener('input', (event) => {
     const target = event.target as HTMLInputElement;
     state.ex2MessageB = target.value;
+  });
+
+  const ex2SignerB = document.querySelector<HTMLSelectElement>('#ex2-signer-b');
+  ex2SignerB?.addEventListener('change', (event) => {
+    const target = event.target as HTMLSelectElement;
+    state.ex2SignerIndexB = Number.parseInt(target.value, 10);
   });
 
   const ex2Run = document.querySelector<HTMLButtonElement>('#ex2-run');

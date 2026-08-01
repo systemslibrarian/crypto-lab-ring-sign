@@ -10,6 +10,7 @@ import {
   reconstructChallengeChain,
   ringSignAndVerify,
   verifyEd25519WebCryptoRoundtrip,
+  toVerifierView,
   decodeHex,
   type LsagSignature,
   type RingKeyPair
@@ -289,6 +290,35 @@ describe('WebCrypto Ed25519 key material', () => {
       const x = BigInt(`0x${m.secretScalarHex}`);
       const derived = BASE.multiply(x);
       expect(toHex(derived.toBytes())).toBe(m.publicKeyHex);
+    }
+  });
+});
+
+/**
+ * Exhibit 1 said "The verifier sees only the data here" under a response grid
+ * that was rendered straight from the prover's LsagSignature — signerIndex and
+ * all. The grid is now built from toVerifierView(); these pin that the wire
+ * object has no signer field and that verification does not need one.
+ */
+describe('the verifier view carries no signer index', () => {
+  it('strips signerIndex and keeps exactly the verifiable fields', async () => {
+    const members = await generateRingMembers(5);
+    const sig = await signLsag('m', members, 3);
+    const view = toVerifierView(sig);
+    expect(Object.keys(view).sort()).toEqual(
+      ['c0Hex', 'keyImageHex', 'message', 'responsesHex', 'ring'].sort()
+    );
+    expect('signerIndex' in view).toBe(false);
+  });
+
+  it('verifies from the wire view alone, for every signer position', async () => {
+    const members = await generateRingMembers(4);
+    for (let i = 0; i < members.length; i += 1) {
+      const sig = await signLsag('m', members, i);
+      const view = toVerifierView(sig);
+      // A lie about the signer index cannot change the verdict, because the
+      // verifier never reads it: verification succeeds on the stripped object.
+      await expect(verifyLsag('m', { ...view, signerIndex: -1 } as LsagSignature)).resolves.toBe(true);
     }
   });
 });

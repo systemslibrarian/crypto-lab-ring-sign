@@ -6,6 +6,7 @@ import {
   verifyGroupSignature,
   openGroupSignature,
   isRingVsGroupSummary,
+  linkageFromWire,
   type GroupSignature
 } from './group.ts';
 
@@ -92,5 +93,46 @@ describe('P-256 manager-issued group signatures', () => {
     const s = isRingVsGroupSummary();
     expect(s).toMatch(/ambiguity/i);
     expect(s).toMatch(/manager/i);
+  });
+});
+
+/**
+ * Exhibit 4's live readout said "Signer identity to verifier: hidden (only sees
+ * manager-issued credential proof)" as a fixed string, while every signature
+ * carries a stable credentialId and the member's public key in the clear — so
+ * two showings by one member are linkable by anyone. The readout is now computed
+ * by linkageFromWire(); these pin what it reports.
+ */
+describe('what a verifier can correlate from the wire alone', () => {
+  it('links repeat signatures by the same member without the manager', async () => {
+    const manager = await createGroupManager();
+    const alice = await issueCredential(manager, 'alice');
+    const history: GroupSignature[] = [];
+    history.push(await groupSign('m1', alice));
+    history.push(await groupSign('m2', alice));
+    const linkage = linkageFromWire(history[1], history);
+    expect(linkage.linkedCount).toBe(2);
+    expect(linkage.distinctSigners).toBe(1);
+    expect(linkage.pseudonym).toBe(alice.credentialId);
+    // The fields that stayed byte-identical across both showings ARE the handle.
+    expect(linkage.stableFields).toContain('credentialId');
+    expect(linkage.stableFields).toContain('memberPublicJwk');
+  });
+
+  it('separates distinct members and does not over-link them', async () => {
+    const manager = await createGroupManager();
+    const alice = await issueCredential(manager, 'alice');
+    const bob = await issueCredential(manager, 'bob');
+    const history: GroupSignature[] = [
+      await groupSign('m1', alice),
+      await groupSign('m2', bob),
+      await groupSign('m3', bob)
+    ];
+    const forBob = linkageFromWire(history[2], history);
+    expect(forBob.distinctSigners).toBe(2);
+    expect(forBob.linkedCount).toBe(2);
+    const forAlice = linkageFromWire(history[0], history);
+    expect(forAlice.linkedCount).toBe(1);
+    expect(forAlice.stableFields).toEqual([]);
   });
 });

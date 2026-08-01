@@ -178,5 +178,54 @@ export const verifyGroupSignature = async (
 export const openGroupSignature = (manager: GroupManager, signature: GroupSignature): string | null =>
   manager.registry.get(signature.credentialId) ?? null;
 
+/**
+ * What a verifier actually learns about the signer, computed from the wire
+ * bytes alone. The page used to state flatly that the signer's identity was
+ * "hidden (only sees manager-issued credential proof)". It is not: every
+ * signature carries a stable credentialId and the member's public key, so
+ * repeat signatures from one member are trivially linkable by anybody, not just
+ * the manager. This returns the pseudonym a verifier can key on, plus how many
+ * of the supplied signatures collapse onto it.
+ */
+export type PseudonymLinkage = {
+  /** The stable handle a verifier can group by. */
+  pseudonym: string;
+  /** How many of the supplied signatures carry this same handle. */
+  linkedCount: number;
+  /** Distinct pseudonyms across the supplied signatures. */
+  distinctSigners: number;
+  /** The fields of the signature that are constant per member. */
+  stableFields: string[];
+};
+
+const memberHandle = (signature: GroupSignature): string =>
+  `${signature.credentialId}:${JSON.stringify(signature.memberPublicJwk)}`;
+
+export const linkageFromWire = (
+  signature: GroupSignature,
+  history: GroupSignature[]
+): PseudonymLinkage => {
+  const handle = memberHandle(signature);
+  const handles = history.map(memberHandle);
+  const stableFields: string[] = [];
+  // Derived, not listed by hand: any field whose value repeats across two
+  // signatures by the same handle is a correlation handle in its own right.
+  const sameSigner = history.filter((s) => memberHandle(s) === handle);
+  if (sameSigner.length > 1) {
+    for (const key of ['credentialId', 'issuedPayload', 'managerSignatureHex'] as const) {
+      if (sameSigner.every((s) => s[key] === sameSigner[0][key])) stableFields.push(key);
+    }
+    if (sameSigner.every((s) => JSON.stringify(s.memberPublicJwk) === JSON.stringify(sameSigner[0].memberPublicJwk))) {
+      stableFields.push('memberPublicJwk');
+    }
+  }
+  return {
+    pseudonym: signature.credentialId,
+    linkedCount: handles.filter((h) => h === handle).length,
+    distinctSigners: new Set(handles).size,
+    stableFields
+  };
+};
+
 export const isRingVsGroupSummary = (): string =>
   'Ring signatures provide signer ambiguity without a manager; group signatures add a manager that can open signatures for accountability.';

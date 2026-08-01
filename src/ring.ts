@@ -40,6 +40,21 @@ export type LsagSignature = {
   signerIndex: number;
 };
 
+/**
+ * Exactly what goes on the wire. `LsagSignature` is the PROVER's object and
+ * carries `signerIndex` so the demo can narrate what happened; a verifier never
+ * receives that field, and `verifyLsag` never reads it. Anything the page claims
+ * a verifier can see is rendered from this type, so the claim is enforced by the
+ * shape of the data rather than asserted in prose beside a field that is there.
+ */
+export type VerifierView = Omit<LsagSignature, 'signerIndex'>;
+
+/** Strip the prover-only field. The result is what a verifier is handed. */
+export const toVerifierView = (signature: LsagSignature): VerifierView => {
+  const { signerIndex: _proverOnly, ...wire } = signature;
+  return wire;
+};
+
 const mod = (x: bigint): bigint => {
   const r = x % CURVE_ORDER;
   return r >= 0n ? r : r + CURVE_ORDER;
