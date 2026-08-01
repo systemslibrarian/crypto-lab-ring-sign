@@ -63,6 +63,7 @@ const state: {
   ex1Verified: boolean;
   ex1Chain: string[];
   ex1ActiveStep: number;
+  ex1ChainWalked: boolean;
   ex1ChainClosed: boolean;
   ex1Tamper: TamperResult | null;
   ex1RevealSigner: boolean;
@@ -89,6 +90,7 @@ const state: {
   ex1Verified: false,
   ex1Chain: [],
   ex1ActiveStep: -1,
+  ex1ChainWalked: false,
   ex1ChainClosed: false,
   ex1Tamper: null,
   ex1RevealSigner: false,
@@ -142,9 +144,19 @@ const themeMeta = (theme: ThemeMode): { icon: string; label: string } =>
 // step i lights the edge leaving node i (deriving c_{i+1} from c_i). After the
 // last edge the walk lands back on node 0; ex1ChainClosed then controls whether
 // the "chain closed: c_n == c0" connector/badge is drawn.
+//
+// ex1ChainClosed is DERIVED, never asserted: it is the actual equality
+// c_n == c0 over the chain the verifier recomputed, AND-ed with the boolean
+// verifyLsag() returned. If the LSAG arithmetic were wrong, the walk would
+// finish and the badge would read "chain broken" — the animation cannot print
+// a verdict the math did not produce.
+const chainActuallyCloses = (chain: string[]): boolean =>
+  chain.length > 1 && chain[chain.length - 1] === chain[0];
+
 const animateChallengeChain = async (): Promise<void> => {
   const n = state.members.length;
   state.ex1ChainClosed = false;
+  state.ex1ChainWalked = false;
   state.ex1ActiveStep = -1;
   render();
   for (let i = 0; i < n; i += 1) {
@@ -152,8 +164,10 @@ const animateChallengeChain = async (): Promise<void> => {
     render();
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
-  // The walk has returned to node 0; snap the closing connector shut.
-  state.ex1ChainClosed = true;
+  // The walk has returned to node 0. Snap the closing connector shut only if the
+  // recomputed final challenge really equals c0 and verification really passed.
+  state.ex1ChainWalked = true;
+  state.ex1ChainClosed = chainActuallyCloses(state.ex1Chain) && state.ex1Verified;
   render();
   await new Promise((resolve) => setTimeout(resolve, 200));
 };
@@ -166,6 +180,7 @@ const setupRing = async (ringSize: number): Promise<void> => {
   state.ex1Verified = false;
   state.ex1Chain = [];
   state.ex1ActiveStep = -1;
+  state.ex1ChainWalked = false;
   state.ex1ChainClosed = false;
   state.ex1Tamper = null;
   state.ex1RevealSigner = false;
@@ -241,10 +256,12 @@ const runExhibit1Tamper = async (kind: TamperKind): Promise<void> => {
     chain = await safeReconstruct(state.ex1Message, corrupted);
   }
   state.ex1Tamper = { kind, verified, chain };
-  // Show the broken walk in the ring: light every edge, but leave it un-closed.
+  // Show the walk in the ring, then derive closure from the tampered chain the
+  // verifier actually recomputed — not from the assumption that tampering fails.
   state.ex1Chain = chain.length > 0 ? chain : state.ex1Chain;
   state.ex1ActiveStep = state.members.length - 1;
-  state.ex1ChainClosed = false;
+  state.ex1ChainWalked = true;
+  state.ex1ChainClosed = chainActuallyCloses(chain) && verified;
 };
 
 // A ledger records every key image a "network node" has already accepted. A
@@ -355,7 +372,7 @@ const ringEdges = (): string => {
   if (n < 2) {
     return '';
   }
-  const tampered = state.ex1Tamper !== null;
+  const walked = state.ex1ChainWalked;
   const walking = state.ex1ActiveStep >= 0;
   const segments: string[] = [];
   for (let i = 0; i < n; i += 1) {
@@ -364,8 +381,9 @@ const ringEdges = (): string => {
     const isClosing = (i + 1) % n === 0; // edge that returns to node 0
     // An edge is "lit" once the walk has reached or passed its source node.
     const lit = walking && state.ex1ActiveStep >= i;
-    const closed = isClosing && state.ex1ChainClosed && !tampered;
-    const brokenClose = isClosing && tampered;
+    // The closing edge is solid only when the recomputed c_n really equalled c0.
+    const closed = isClosing && walked && state.ex1ChainClosed;
+    const brokenClose = isClosing && walked && !state.ex1ChainClosed;
     const classes = [
       'ring-edge',
       isClosing ? 'ring-edge-closing' : '',
@@ -408,9 +426,57 @@ const ringVisual = (): string => {
     .join('');
 };
 
+// Ordinary least-squares fit of one series against ring size, plus the
+// coefficient of determination. This is what lets the page SAY "cost grows
+// roughly linearly" only when the numbers it just measured actually say so —
+// the claim is read off the samples, not printed next to them.
+const fitLinear = (
+  samples: PerfSample[],
+  series: 'sign' | 'verify'
+): { slope: number; intercept: number; r2: number } | null => {
+  if (samples.length < 3) {
+    return null;
+  }
+  const xs = samples.map((s) => s.ringSize);
+  const ys = samples.map((s) => (series === 'sign' ? s.signMs : s.verifyMs));
+  const n = xs.length;
+  const meanX = xs.reduce((a, b) => a + b, 0) / n;
+  const meanY = ys.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0;
+  let sxx = 0;
+  let syy = 0;
+  for (let i = 0; i < n; i += 1) {
+    sxy += (xs[i] - meanX) * (ys[i] - meanY);
+    sxx += (xs[i] - meanX) ** 2;
+    syy += (ys[i] - meanY) ** 2;
+  }
+  if (sxx === 0 || syy === 0) {
+    return null;
+  }
+  const slope = sxy / sxx;
+  return { slope, intercept: meanY - slope * meanX, r2: (sxy * sxy) / (sxx * syy) };
+};
+
+// Describe the measured growth honestly. A timing sweep in a browser is noisy;
+// if this run did not in fact come out close to linear, say that instead of
+// asserting the textbook answer over the top of the user's own data.
+const growthVerdict = (samples: PerfSample[]): string => {
+  const sign = fitLinear(samples, 'sign');
+  const verify = fitLinear(samples, 'verify');
+  if (!sign || !verify) {
+    return 'Run the full sweep to fit a growth curve to your own measurements.';
+  }
+  const fmt = (v: number): string => v.toFixed(v < 1 ? 3 : 2);
+  const linear = sign.r2 >= 0.9 && verify.r2 >= 0.9;
+  const lead = linear
+    ? 'Your run came out close to linear, as O(n) predicts'
+    : 'Your run is noisy — the linear fit is weak here, which is a timing artefact of the browser, not evidence against O(n)';
+  return `<strong>Measured on your machine:</strong> ${lead}. Least-squares fit over ${samples.length} ring sizes: sign ≈ ${fmt(sign.slope)} ms per extra ring member (R² = ${sign.r2.toFixed(3)}), verify ≈ ${fmt(verify.slope)} ms per extra member (R² = ${verify.r2.toFixed(3)}).`;
+};
+
 // A real line/scatter plot: ring size on the x-axis, milliseconds on the y-axis,
-// two overlaid series (sign, verify), plus a faint linear reference line fitted
-// through the origin and the largest sign sample so O(n) growth is legible.
+// two overlaid series (sign, verify), plus a faint reference chord drawn between
+// the first and last measured sign samples so O(n) growth is legible by eye.
 const scatterPlot = (samples: PerfSample[]): string => {
   if (samples.length === 0) {
     return '';
@@ -470,7 +536,12 @@ const scatterPlot = (samples: PerfSample[]): string => {
       return `<text class="axis-tick" x="${x.toFixed(1)}" y="${H - padB + 14}" text-anchor="middle">${s.ringSize}</text>`;
     });
 
-  return `<svg class="scatter" viewBox="0 0 ${W} ${H}" role="img" aria-label="Line chart of average sign and verify time in milliseconds versus ring size ${minX} to ${maxX}. Both series rise roughly linearly and track the dashed linear reference line.">
+  const fit = fitLinear(samples, 'sign');
+  const shape = fit
+    ? `The sign series fits a straight line with R squared ${fit.r2.toFixed(2)}, slope ${fit.slope.toFixed(3)} milliseconds per extra ring member.`
+    : 'Not enough samples yet to fit a growth curve.';
+
+  return `<svg class="scatter" viewBox="0 0 ${W} ${H}" role="img" aria-label="Line chart of average sign and verify time in milliseconds versus ring size ${minX} to ${maxX}. ${shape}">
     ${yTicks.join('')}
     <line class="axis" x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}" />
     <line class="axis" x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}" />
@@ -572,15 +643,21 @@ const render = (): void => {
           ${ringEdges()}
           ${ringVisual()}
           ${
-            state.ex1ChainClosed && !state.ex1Tamper
-              ? '<span class="chain-badge chain-badge-ok" role="status">chain closed: c<sub>n</sub> == c0 ✓</span>'
-              : state.ex1Tamper
-                ? '<span class="chain-badge chain-badge-fail" role="status">chain broken: c<sub>n</sub> ≠ c0 ✗</span>'
-                : ''
+            !state.ex1ChainWalked
+              ? ''
+              : state.ex1ChainClosed
+                ? '<span class="chain-badge chain-badge-ok" role="status">chain closed: c<sub>n</sub> == c0 ✓</span>'
+                : '<span class="chain-badge chain-badge-fail" role="status">chain broken: c<sub>n</sub> ≠ c0 ✗</span>'
           }
         </div>
         <div class="info-grid" aria-live="polite" role="status">
-          <p><strong>Verification:</strong> ${state.ex1Verified ? '<span class="ok">valid ring signature</span>' : '<span class="muted">no signature yet</span>'}</p>
+          <p><strong>Verification:</strong> ${
+            latestSig
+              ? state.ex1Verified
+                ? '<span class="ok">valid ring signature</span>'
+                : '<span class="danger">rejected — verifyLsag() returned false</span>'
+              : '<span class="muted">no signature yet</span>'
+          }</p>
           <p><strong>Signer clue to verifier:</strong> none (all members satisfy the challenge chain equation)</p>
           <p><strong>Challenge chain (walks the loop, must return to c0):</strong> <span class="chain-wrap">${
             state.ex1Chain.length > 0
@@ -588,8 +665,8 @@ const render = (): void => {
                   .map((c, i) => {
                     const isLast = i === state.ex1Chain.length - 1;
                     const lit = state.ex1ActiveStep >= 0 && i <= state.ex1ActiveStep + 1;
-                    const closeOk = isLast && state.ex1ChainClosed && !state.ex1Tamper;
-                    const closeFail = isLast && (state.ex1Tamper !== null);
+                    const closeOk = isLast && state.ex1ChainWalked && state.ex1ChainClosed;
+                    const closeFail = isLast && state.ex1ChainWalked && !state.ex1ChainClosed;
                     const cls = ['chain', lit ? 'active' : '', closeOk ? 'chain-close-ok' : '', closeFail ? 'chain-close-fail' : ''].filter(Boolean).join(' ');
                     const label = isLast ? `c${i} (should equal c0)` : `challenge ${i}`;
                     return `<span class="${cls}" aria-label="${label}">c${i === state.ex1Chain.length - 1 ? 'ₙ' : i}=${shortHex(c, 7, 5)}</span>`;
@@ -732,12 +809,13 @@ const render = (): void => {
                   <span><span class="swatch swatch-ref"></span>linear reference</span>
                 </div>
                 ${ex3ChartHtml}
-                <figcaption class="sr-only">Average sign and verify time in milliseconds plotted against ring size; both series rise roughly linearly.</figcaption>
+                <figcaption class="sr-only">Average sign and verify time in milliseconds plotted against ring size, with a least-squares linear fit reported below the chart.</figcaption>
               </figure>`
             : '<p class="muted curve-empty">Run the sweep to chart how signing and verification cost scale with the anonymity set.</p>'
         }
         <div class="info-grid" aria-live="polite" role="status">
-          <p><strong>What the chart shows:</strong> cost grows roughly linearly with ring size — each extra decoy adds one more set of curve operations to both signing and verifying.</p>
+          ${ex3Curve.length > 0 ? `<p>${growthVerdict(ex3Curve)}</p>` : ''}
+          <p><strong>What the chart should show:</strong> cost grows linearly with ring size — each extra decoy adds one more set of curve operations to both signing and verifying. The fit above is measured, not assumed.</p>
           <p><strong>The tradeoff:</strong> a larger ring means more plausible signers (better anonymity) but more computation and a larger signature.</p>
           <p><strong>Monero ring size timeline:</strong> the mandatory minimum rose <strong>3</strong> (Mar 2016) → <strong>5</strong> (Sep 2017) → <strong>7</strong> (Apr 2018) → <strong>11</strong>, now fixed rather than a floor (Oct 2018) → <strong>16</strong> (Aug 2022), trading cost for stronger privacy. Older write-ups say "4" for the 2017 step; that was the minimum <em>mixin</em> (decoys), and ring size = mixin + 1, so the ring size was 5. Monero never mandated a ring size of 4.</p>
         </div>
