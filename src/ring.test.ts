@@ -116,6 +116,35 @@ describe('LSAG rejects forgeries and tampering', () => {
     };
     await expect(verifyLsag('steal', forged)).resolves.toBe(false);
   });
+
+  // Liu-Wei-Wong LSAG computes c_{i+1} = H(L, m, L_i, R_i) where L is the LIST
+  // of ring public keys. The challenge hash now includes that list, so a
+  // signature is bound to the exact ring — same members, same order — it was
+  // produced for.
+  it('binds the signature to its ring: substituting a member fails verification', async () => {
+    const members = await generateRingMembers(5);
+    const strangers = await generateRingMembers(2);
+    const sig = await signLsag('bind', members, 2);
+    await expect(verifyLsag('bind', sig)).resolves.toBe(true);
+
+    const substituted: LsagSignature = {
+      ...sig,
+      ring: sig.ring.map((m, i) =>
+        i === 4 ? { ...m, publicKeyHex: strangers[0].publicKeyHex } : m
+      )
+    };
+    await expect(verifyLsag('bind', substituted)).resolves.toBe(false);
+  });
+
+  it('binds the signature to its ring ORDER: permuting the ring fails verification', async () => {
+    const members = await generateRingMembers(5);
+    const sig = await signLsag('order', members, 2);
+    const reordered: LsagSignature = {
+      ...sig,
+      ring: [sig.ring[1], sig.ring[0], ...sig.ring.slice(2)]
+    };
+    await expect(verifyLsag('order', reordered)).resolves.toBe(false);
+  });
 });
 
 describe('LSAG anonymity / signer ambiguity', () => {

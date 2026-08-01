@@ -441,6 +441,22 @@ button:disabled {
   margin-top: 0.7rem;
 }
 
+/* Citations: the papers this lab implements. */
+.reading-heading {
+  margin-top: 1.15rem;
+}
+
+.reading-list {
+  margin: 0;
+  padding-left: 1.15rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.reading-list li + li {
+  margin-top: 0.45rem;
+}
+
 /* ============================================
    Explainers (collapsible "how it works")
    ============================================ */

@@ -657,7 +657,8 @@ const render = (): void => {
           'How the ring hides the signer',
           `<p>The signature is one starting challenge <code>c0</code> plus one response <code>s<sub>i</sub></code> per member. Verification walks the ring: from <code>c0</code> it recomputes the next challenge using each member's public key and response, and accepts only if the walk returns to <code>c0</code>.</p>
            <p>To sign, the real member fills <em>every other</em> slot with a random response and derives each challenge honestly around the loop. Then they use their secret key to compute the single response that makes the loop close back at <code>c0</code>. Because all responses are uniform scalars, the verifier cannot tell which slot was closed with a secret — so any member of the ring is an equally plausible signer.</p>
-           <p>The <strong>key image</strong> is derived from the secret key and a hash of the public key. It is unique to the signer but reveals nothing about which ring member it belongs to — that is what makes Exhibit 2 possible.</p>`
+           <p>The <strong>key image</strong> is derived from the secret key and a hash of the public key. It is unique to the signer but reveals nothing about which ring member it belongs to — that is what makes Exhibit 2 possible.</p>
+           <p><strong>What each challenge actually hashes.</strong> LSAG defines <code>c<sub>i+1</sub> = H(L, m, L<sub>i</sub>, R<sub>i</sub>)</code>, where <code>L</code> is the <em>list of ring public keys</em> — every member, in order. Hashing <code>L</code> is what binds a signature to the exact ring it was made for: change one decoy, or merely reorder the ring, and every challenge shifts and the loop no longer closes. Without it the signature would only assert "someone in <em>some</em> ring signed this", and the ring the verifier is looking at would not be the one the signer committed to. The Liu-Wei-Wong security proof relies on it.</p>`
         )}
       </section>
 
@@ -738,7 +739,7 @@ const render = (): void => {
         <div class="info-grid" aria-live="polite" role="status">
           <p><strong>What the chart shows:</strong> cost grows roughly linearly with ring size — each extra decoy adds one more set of curve operations to both signing and verifying.</p>
           <p><strong>The tradeoff:</strong> a larger ring means more plausible signers (better anonymity) but more computation and a larger signature.</p>
-          <p><strong>Monero ring size timeline:</strong> the mandatory minimum rose 4 → 7 → 11 → 16 over time, trading cost for stronger privacy.</p>
+          <p><strong>Monero ring size timeline:</strong> the mandatory minimum rose <strong>3</strong> (Mar 2016) → <strong>5</strong> (Sep 2017) → <strong>7</strong> (Apr 2018) → <strong>11</strong>, now fixed rather than a floor (Oct 2018) → <strong>16</strong> (Aug 2022), trading cost for stronger privacy. Older write-ups say "4" for the 2017 step; that was the minimum <em>mixin</em> (decoys), and ring size = mixin + 1, so the ring size was 5. Monero never mandated a ring size of 4.</p>
         </div>
         ${explainer(
           'Why bigger rings cost more',
@@ -776,7 +777,8 @@ const render = (): void => {
         ${explainer(
           'How accountable anonymity is built',
           `<p>The manager issues a <strong>credential</strong>: an ECDSA signature over the member's public key. To sign a message, the member signs it with their own key and attaches that credential. A verifier checks two things — the manager's signature proves "a manager admitted this key", and the member's signature proves "the holder of that key approved this message" — without learning the member's real-world identity.</p>
-           <p>The manager keeps a private registry mapping each credential to an identity, so <em>only</em> the manager can <strong>open</strong> a signature and name the signer. Compare with Exhibit 1: a ring signature has no manager and no opener — anonymity there is unconditional, whereas a group signature deliberately keeps an accountability backdoor.</p>`
+           <p>The manager keeps a private registry mapping each credential to an identity, so <em>only</em> the manager can <strong>open</strong> a signature and name the signer. Compare with Exhibit 1: a ring signature has no manager and no opener — nobody holds a trapdoor that names the signer, whereas a group signature deliberately keeps an accountability backdoor.</p>
+           <p class="note caveat"><strong>Careful with the word "unconditional".</strong> LSAG's signer ambiguity is <strong>computational</strong>, not information-theoretic: the proof reduces to the DDH assumption on the curve in the random-oracle model. An adversary with unbounded computing power, or a break in DDH on edwards25519, could identify the signer. Some ring signatures really are unconditional — the original Rivest-Shamir-Tauman construction is <em>unconditionally</em> signer-ambiguous. LSAG trades that away to buy linkability: the key image is a deterministic function of the signer's secret, so signer ambiguity can only be computational. "No opener exists" and "anonymity holds against any adversary" are different claims; only the first is true here.</p>`
         )}
       </section>
 
@@ -800,6 +802,14 @@ const render = (): void => {
           </article>
         </div>
         <p class="note">Blockchain analysis resistance improves when cryptographic proofs remove or diffuse direct linkage signals between transactions.</p>
+
+        <h3 class="reading-heading">Further reading</h3>
+        <ul class="reading-list">
+          <li><a href="https://people.csail.mit.edu/rivest/pubs/RST01.pdf" target="_blank" rel="noreferrer">Rivest, Shamir &amp; Tauman, "How to Leak a Secret" (ASIACRYPT 2001)</a> — the paper that introduced ring signatures; its construction is <em>unconditionally</em> signer-ambiguous.</li>
+          <li><a href="https://eprint.iacr.org/2004/027" target="_blank" rel="noreferrer">Liu, Wei &amp; Wong, "Linkable Spontaneous Anonymous Group Signature for Ad Hoc Groups" (ACISP 2004, ePrint 2004/027)</a> — <strong>LSAG</strong>, the scheme this lab implements: the key image, the linkability property, and the signer-ambiguity proof under DDH in the random-oracle model.</li>
+          <li><a href="https://eprint.iacr.org/2019/654" target="_blank" rel="noreferrer">Goodell, Noether &amp; Blue, "Concise Linkable Ring Signatures and Forgery Against Adversarial Keys" (ePrint 2019/654)</a> — <strong>CLSAG</strong>, the smaller successor Monero runs today.</li>
+          <li><a href="https://www.getmonero.org/2017/09/13/september-15-2017-protocol-upgrade-hard-fork.html" target="_blank" rel="noreferrer">Monero, "A Scheduled Protocol Upgrade is Planned for September 15" (2017)</a> — the upgrade that set the minimum ring size to 5 (mixin 4), the step often misquoted as "ring size 4".</li>
+        </ul>
       </section>
     </main>
   `;

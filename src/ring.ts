@@ -117,14 +117,38 @@ const hashPoint = (point: typeof BASE): typeof BASE => {
   return hp.clearCofactor();
 };
 
+// Serialize the ring's public keys once per signature, in ring order, so every
+// link of the challenge chain hashes the same L. Encoded as a 2-byte big-endian
+// count followed by the fixed-width 32-byte compressed points, which makes the
+// encoding unambiguous (no ring can be reparsed as a different ring).
+const encodeRing = (pubPoints: (typeof BASE)[]): Uint8Array => {
+  const header = new Uint8Array(2);
+  header[0] = (pubPoints.length >> 8) & 0xff;
+  header[1] = pubPoints.length & 0xff;
+  return concatBytes(header, ...pubPoints.map((p) => p.toBytes()));
+};
+
+// Liu-Wei-Wong LSAG challenge: c_{i+1} = H(L, m, L_i, R_i), where L is the LIST
+// OF RING PUBLIC KEYS. Hashing L is not decoration — it is what binds a
+// signature to the exact ring it was produced for, and the reduction in the
+// LWW security proof relies on it. Without L in the hash, a valid signature can
+// be replayed against a *different* ring that happens to reproduce the same
+// (L_i, R_i) sequence, and the "ring" the verifier believes in is no longer the
+// ring the signer committed to.
+//
+// Reference: Liu, Wei & Wong, "Linkable Spontaneous Anonymous Group Signature
+// for Ad Hoc Groups" (ACISP 2004), §4.
 const challengeFor = async (
+  ringBytes: Uint8Array,
   message: string,
   keyImage: typeof BASE,
   lPoint: typeof BASE,
   rPoint: typeof BASE
 ): Promise<bigint> =>
   hashToScalar(
-    utf8('LSAG_CHALLENGE_V1'),
+    // V2: V1 hashed only (m, I, L_i, R_i) and left the ring unbound.
+    utf8('LSAG_CHALLENGE_V2'),
+    ringBytes,
     utf8(message),
     keyImage.toBytes(),
     lPoint.toBytes(),
@@ -185,6 +209,7 @@ export const signLsag = async (
 
   const n = members.length;
   const pubPoints = members.map((m) => pointFromHex(m.publicKeyHex));
+  const ringBytes = encodeRing(pubPoints);
   const hpPoints = pubPoints.map((p) => hashPoint(p));
   const secret = hexToScalar(members[signerIndex].secretScalarHex);
   const keyImage = keyImageFromSecret(secret, pubPoints[signerIndex]);
@@ -195,14 +220,14 @@ export const signLsag = async (
   const alpha = randomScalar();
   const lSigner = BASE.multiply(alpha);
   const rSigner = hpPoints[signerIndex].multiply(alpha);
-  c[(signerIndex + 1) % n] = await challengeFor(message, keyImage, lSigner, rSigner);
+  c[(signerIndex + 1) % n] = await challengeFor(ringBytes, message, keyImage, lSigner, rSigner);
 
   let i = (signerIndex + 1) % n;
   while (i !== signerIndex) {
     s[i] = randomScalar();
     const l = BASE.multiply(s[i]).add(pubPoints[i].multiply(c[i]));
     const r = hpPoints[i].multiply(s[i]).add(keyImage.multiply(c[i]));
-    c[(i + 1) % n] = await challengeFor(message, keyImage, l, r);
+    c[(i + 1) % n] = await challengeFor(ringBytes, message, keyImage, l, r);
     i = (i + 1) % n;
   }
 
@@ -239,6 +264,7 @@ export const verifyLsag = async (message: string, signature: LsagSignature): Pro
   if (pubPoints.some((p) => p.isSmallOrder() || !p.isTorsionFree())) {
     return false;
   }
+  const ringBytes = encodeRing(pubPoints);
   const hpPoints = pubPoints.map((p) => hashPoint(p));
 
   let c = c0;
@@ -246,7 +272,7 @@ export const verifyLsag = async (message: string, signature: LsagSignature): Pro
     const s = hexToScalar(signature.responsesHex[i]);
     const l = BASE.multiply(s).add(pubPoints[i].multiply(c));
     const r = hpPoints[i].multiply(s).add(keyImage.multiply(c));
-    c = await challengeFor(message, keyImage, l, r);
+    c = await challengeFor(ringBytes, message, keyImage, l, r);
   }
   return c === c0;
 };
@@ -257,6 +283,7 @@ export const reconstructChallengeChain = async (
 ): Promise<string[]> => {
   const keyImage = pointFromHex(signature.keyImageHex);
   const pubPoints = signature.ring.map((m) => pointFromHex(m.publicKeyHex));
+  const ringBytes = encodeRing(pubPoints);
   const hpPoints = pubPoints.map((p) => hashPoint(p));
   const chain: string[] = [];
   let c = hexToScalar(signature.c0Hex);
@@ -265,7 +292,7 @@ export const reconstructChallengeChain = async (
     const s = hexToScalar(signature.responsesHex[i]);
     const l = BASE.multiply(s).add(pubPoints[i].multiply(c));
     const r = hpPoints[i].multiply(s).add(keyImage.multiply(c));
-    c = await challengeFor(message, keyImage, l, r);
+    c = await challengeFor(ringBytes, message, keyImage, l, r);
     chain.push(scalarToHex(c));
   }
   return chain;
