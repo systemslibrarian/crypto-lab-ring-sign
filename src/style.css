@@ -1058,7 +1058,6 @@ button.seg.seg-on {
   color: var(--danger);
 }
 
-/* BEGIN cl-hero standard — managed, keep in sync across fleet */
 /* This lab's tokens: --muted (no --text-dim), --line (no --border). */
 .cl-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:clamp(1rem,4vw,3rem);flex-wrap:wrap;margin:clamp(1rem,3vw,2rem) 0 1.5rem;}
 .cl-hero-main{flex:1 1 22rem;min-width:min(100%,20rem);}
@@ -1069,7 +1068,12 @@ button.seg.seg-on {
 .cl-hero-why-label{display:block;font-size:.68rem;font-weight:700;letter-spacing:.14em;color:var(--muted);}
 .cl-hero-why-text{margin:.35rem 0 0;font-size:.95rem;line-height:1.5;color:var(--text);}
 @media (max-width:640px){.cl-hero{flex-direction:column;}.cl-hero-why{flex-basis:auto;width:100%;}}
-/* END cl-hero standard */
+
+/* Mobile: in the column layout the 22rem flex-basis becomes a minimum
+   HEIGHT, padding dead space above the fold. Reset it. */
+@media (max-width: 640px) {
+  .cl-hero-main { flex-basis: auto; min-width: 0; }
+}
 
 /* ============================================
    Reduced motion
