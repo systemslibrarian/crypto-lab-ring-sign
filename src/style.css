@@ -12,6 +12,7 @@
   --text: #e8f0f3;        /* ≥ 13.5 : 1 on --bg */
   --muted: #b0c4cc;       /* ≥ 7.2 : 1 on --panel */
   --line: #3a5a68;
+  --line-strong: #5b7886; /* ≥ 3 : 1 control boundary on --panel-soft */
   --accent: #5ce0b6;      /* ≥ 8.0 : 1 on dark bg */
   --accent-2: #82b8ff;
   --danger: #ff8f99;       /* ≥ 5.5 : 1 */
@@ -28,6 +29,7 @@
   --text: #111f27;
   --muted: #3b545f;       /* ≥ 4.7 : 1 on white */
   --line: #b0c9d2;
+  --line-strong: #67818c; /* ≥ 3 : 1 control boundary on --panel-soft */
   --accent: #07735a;      /* ≥ 4.6 : 1 on white */
   --accent-2: #1a5fc0;
   --danger: #b82a3e;
@@ -277,7 +279,7 @@ select,
 button {
   font-family: inherit;
   font-size: 1rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: 0.65rem;
   background-color: var(--panel-soft);
   color: var(--text);

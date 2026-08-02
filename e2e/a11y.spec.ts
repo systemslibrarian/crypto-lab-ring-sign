@@ -80,3 +80,84 @@ test('no WCAG A/AA violations in light theme', async ({ page }) => {
   await expandAll(page);
   await scan(page);
 });
+
+/**
+ * WCAG 1.4.11 — form-control boundaries must reach 3:1 against the adjacent
+ * surface. Measures rendered computed styles, compositing translucent
+ * backgrounds down the ancestor chain, so a token regression cannot pass by
+ * only looking right in the source.
+ */
+async function minControlBorderRatio(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const parse = (c: string): number[] => {
+      const m = c.match(/rgba?\(([^)]+)\)/);
+      if (!m) return [0, 0, 0, 1];
+      const p = m[1].split(',').map((v) => parseFloat(v));
+      return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+    };
+    const over = (top: number[], bot: number[]): number[] => {
+      const a = top[3] + bot[3] * (1 - top[3]);
+      return [
+        (top[0] * top[3] + bot[0] * bot[3] * (1 - top[3])) / a,
+        (top[1] * top[3] + bot[1] * bot[3] * (1 - top[3])) / a,
+        (top[2] * top[3] + bot[2] * bot[3] * (1 - top[3])) / a,
+        a,
+      ];
+    };
+    const surfaceBehind = (el: Element | null): number[] => {
+      const layers: number[][] = [];
+      for (let n = el; n; n = n.parentElement) {
+        const bg = parse(getComputedStyle(n).backgroundColor);
+        if (bg[3] > 0) layers.push(bg);
+        if (bg[3] >= 1) break;
+      }
+      let out = [255, 255, 255, 1];
+      const rootBg = parse(getComputedStyle(document.documentElement).backgroundColor);
+      if (rootBg[3] > 0) out = rootBg;
+      for (let i = layers.length - 1; i >= 0; i--) out = over(layers[i], out);
+      return out;
+    };
+    const lum = (c: number[]): number => {
+      const f = (v: number): number => {
+        const s = v / 255;
+        return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+      };
+      return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+    };
+    const ratio = (a: number[], b: number[]): number => {
+      const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    let min = Infinity;
+    const controls = document.querySelectorAll<HTMLElement>(
+      "input[type='text'], input[type='range'], select",
+    );
+    for (const el of controls) {
+      if (!el.offsetParent) continue;
+      const cs = getComputedStyle(el);
+      const border = parse(cs.borderTopColor);
+      // The border sits between the control fill and the outer surface;
+      // it must clear 3:1 against at least one, per the SC's intent for
+      // indicating the component's extent. Measure the outer surface —
+      // the stricter, load-bearing side here.
+      const outside = surfaceBehind(el.parentElement);
+      const composited = border[3] < 1 ? over(border, outside) : border;
+      min = Math.min(min, ratio(composited, outside));
+    }
+    return min;
+  });
+}
+
+test('control borders reach 3:1 in dark theme (WCAG 1.4.11)', async ({ page }) => {
+  await mount(page);
+  const min = await minControlBorderRatio(page);
+  expect(min).toBeGreaterThanOrEqual(3);
+});
+
+test('control borders reach 3:1 in light theme (WCAG 1.4.11)', async ({ page }) => {
+  await mount(page);
+  await page.locator('#cl-theme-toggle').click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  const min = await minControlBorderRatio(page);
+  expect(min).toBeGreaterThanOrEqual(3);
+});
