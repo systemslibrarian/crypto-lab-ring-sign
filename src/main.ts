@@ -183,10 +183,12 @@ const animateChallengeChain = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 200));
 };
 
-const setupRing = async (ringSize: number): Promise<void> => {
-  state.ringSize = ringSize;
-  state.members = await generateRingMembers(ringSize);
-  state.signerIndex = Math.min(state.signerIndex, ringSize - 1);
+// Everything in Exhibit 1 that is a claim ABOUT one particular signature: the
+// verdict, the chain it was recomputed from, the closing badge, the tamper
+// readout and the privileged reveal. A verdict is only true of the message and
+// ring it was computed over, so whenever that subject changes the verdict has to
+// be retracted rather than left standing over inputs it never saw.
+const retractExhibit1Verdict = (): void => {
   state.ex1Signature = null;
   state.ex1Verified = false;
   state.ex1Chain = [];
@@ -195,6 +197,13 @@ const setupRing = async (ringSize: number): Promise<void> => {
   state.ex1ChainClosed = false;
   state.ex1Tamper = null;
   state.ex1RevealSigner = false;
+};
+
+const setupRing = async (ringSize: number): Promise<void> => {
+  state.ringSize = ringSize;
+  state.members = await generateRingMembers(ringSize);
+  state.signerIndex = Math.min(state.signerIndex, ringSize - 1);
+  retractExhibit1Verdict();
   state.ex2Result = null;
 };
 
@@ -425,31 +434,34 @@ const ringEdges = (): string => {
   return `<svg class="ring-edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">${segments.join('')}</svg>`;
 };
 
-const ringVisual = (): string => {
-  // In verifier's view the privileged signer highlight is hidden — the whole
-  // point is that a verifier cannot see it. In your view it is shown.
-  const showSigner = !state.ex1VerifierView && state.ex1RevealSigner;
-  return state.members
+// `privilegedSignerIndex` is the ONE place the signer may be named, and it is
+// -1 unless the learner is in their own view AND has pressed the reveal. It is
+// read off the signature currently on screen, never off the signer dropdown:
+// changing the dropdown after signing used to move this highlight to a member
+// who did not produce the displayed signature, while the response grid — which
+// already keyed off the signature — kept marking the real one. The page then
+// named two different signers at once.
+const ringVisual = (privilegedSignerIndex: number): string =>
+  state.members
     .map((member, idx) => {
       const { x, y } = ringNodePos(idx, state.members.length);
       const active = state.ex1ActiveStep === idx || state.ex1ActiveStep === idx + 1;
-      const isSigner = idx === state.signerIndex;
+      const isSigner = idx === privilegedSignerIndex;
       const classes = [
         'ring-node',
-        showSigner && isSigner ? 'ring-node-signer' : '',
+        isSigner ? 'ring-node-signer' : '',
         active ? 'ring-node-active' : '',
         idx === 0 ? 'ring-node-start' : ''
       ]
         .filter(Boolean)
         .join(' ');
-      const signerLabel = showSigner && isSigner ? ' (actual signer, revealed to you only)' : '';
+      const signerLabel = isSigner ? ' (actual signer, revealed to you only)' : '';
       const startLabel = idx === 0 ? ', challenge start c0' : '';
       return `<div class="${classes}" style="left:${x}%;top:${y}%" title="${member.id}" role="img" aria-label="Ring member ${member.id}${signerLabel}${startLabel}${active ? ', challenge active' : ''}">
         <span aria-hidden="true">${member.id}</span>
       </div>`;
     })
     .join('');
-};
 
 // Ordinary least-squares fit of one series against ring size, plus the
 // coefficient of determination. This is what lets the page SAY "cost grows
@@ -589,7 +601,13 @@ const render = (): void => {
   // structurally lacks signerIndex. The privileged index is available only when
   // the learner presses "Reveal the closed slot".
   const wireView = latestSig ? toVerifierView(latestSig) : null;
-  const privilegedSignerIndex = latestSig && state.ex1RevealSigner ? latestSig.signerIndex : -1;
+  // The reveal is privileged information, so it is available only in YOUR view.
+  // The verifier's view claims on screen to be "exactly what a verifier can
+  // see"; it previously hid the ring highlight but left the response grid and
+  // the reveal note naming the signer's slot, which broke that claim outright.
+  // One flag now gates every disclosure, so the two cannot drift apart again.
+  const privilegedRevealActive = state.ex1RevealSigner && !state.ex1VerifierView;
+  const privilegedSignerIndex = latestSig && privilegedRevealActive ? latestSig.signerIndex : -1;
   const ex2 = state.ex2Result;
   const ex3Curve = state.ex3Curve;
   const group = state.group;
@@ -671,7 +689,7 @@ const render = (): void => {
         <div class="ring-stage" role="group" aria-label="Visual ring showing ${state.members.length} members with the challenge chain walking edge by edge back to c0">
           <div class="ring-track"></div>
           ${ringEdges()}
-          ${ringVisual()}
+          ${ringVisual(privilegedSignerIndex)}
           ${
             !state.ex1ChainWalked
               ? ''
@@ -725,11 +743,13 @@ const render = (): void => {
               .join('')}
           </div>
           <div class="reveal-row">
-            <button id="ex1-reveal-signer" type="button" class="ghost" aria-pressed="${state.ex1RevealSigner ? 'true' : 'false'}">${state.ex1RevealSigner ? 'Hide the closed slot' : 'Reveal the closed slot'}</button>
+            <button id="ex1-reveal-signer" type="button" class="ghost" ${state.ex1VerifierView ? 'disabled' : ''} aria-pressed="${privilegedRevealActive ? 'true' : 'false'}">${privilegedRevealActive ? 'Hide the closed slot' : 'Reveal the closed slot'}</button>
             <span class="reveal-note" role="status" aria-live="polite">${
-              state.ex1RevealSigner
-                ? `The secret closed <strong>s${latestSig.signerIndex}</strong> — but now that the hint is off again, it is indistinguishable from the rest. Could you have found it without the hint?`
-                : 'Try first: guess before you peek. The response computed with the secret is a uniform scalar just like every decoy, so statistically there is nothing to find.'
+              state.ex1VerifierView
+                ? 'A verifier holds no such control — that is the point. Switch back to "Your view" to use the privileged reveal.'
+                : privilegedRevealActive
+                  ? `The secret closed <strong>s${latestSig.signerIndex}</strong> — but now that the hint is off again, it is indistinguishable from the rest. Could you have found it without the hint?`
+                  : 'Try first: guess before you peek. The response computed with the secret is a uniform scalar just like every decoy, so statistically there is nothing to find.'
             }</span>
           </div>
           <p class="responses-note">Every response is a uniform scalar. This grid is rendered from the verifier's copy of the signature, whose fields are exactly <code>${Object.keys(wireView!).join(', ')}</code> — the prover-only <code>signerIndex</code> is stripped by <code>toVerifierView()</code> before anything here is drawn, and <code>verifyLsag()</code> never reads it either. The real signer's response is statistically identical to the rest, which is precisely why membership is provable but the signer stays hidden.</p>
@@ -989,6 +1009,26 @@ const render = (): void => {
   ex1Message?.addEventListener('input', (event) => {
     const target = event.target as HTMLInputElement;
     state.ex1Message = target.value;
+    // A signature binds to its exact message, so a verdict about the OLD message
+    // says nothing about the one now in the box. Editing used to leave "valid
+    // ring signature", the closed-chain badge and the whole recomputed chain
+    // standing over a message they were never computed from — and the tamper
+    // buttons would then reject on the message-binding check while claiming the
+    // chain had failed to close. Retract instead.
+    if (state.ex1Signature && state.ex1Signature.message !== target.value) {
+      retractExhibit1Verdict();
+      // render() replaces #app wholesale, so hand typing back to the user: this
+      // fires at most once per signature (the state is null afterwards).
+      const caret = target.selectionStart;
+      render();
+      const reborn = document.querySelector<HTMLInputElement>('#ex1-message');
+      if (reborn) {
+        reborn.focus();
+        if (caret !== null) {
+          reborn.setSelectionRange(caret, caret);
+        }
+      }
+    }
   });
 
   const ex1Run = document.querySelector<HTMLButtonElement>('#ex1-run');
