@@ -14,6 +14,16 @@
       content="Interactive ring signature and group signature cryptography lab in the browser"
     />
     <title>crypto-lab-ring-sign</title>
+    <!-- An inline data-URI icon, so the page declares one rather than leaving
+         the browser to request /favicon.ico and take a 404. That 404 is not
+         cosmetic here: the gate collects console errors, and an intermittent
+         "Failed to load resource: 404" made a passing run indistinguishable
+         from a page that had genuinely failed to fetch something it needed. -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💍</text></svg>"
+    />
   </head>
   <body>
 <style>

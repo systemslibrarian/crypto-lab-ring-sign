@@ -19,6 +19,11 @@
   --ok: #88e596;           /* ≥ 6.8 : 1 */
   --shadow: rgba(0, 0, 0, 0.40);
   --focus-ring: #5ce0b6;
+  /* Strength of the two decorative radial washes on <body>. A THEME token, not
+     a constant, because the same percentage does opposite things in the two
+     themes — see the note on `body` below. */
+  --wash-accent: color-mix(in srgb, var(--accent) 28%, transparent);
+  --wash-accent-2: color-mix(in srgb, var(--accent-2) 22%, transparent);
 }
 
 [data-theme='light'] {
@@ -36,6 +41,16 @@
   --ok: #177335;
   --shadow: rgba(46, 79, 95, 0.16);
   --focus-ring: #1a5fc0;
+  /* 12% / 9%, not the dark theme's 28% / 22%. This theme's --accent is #07735a,
+     a DARK teal, so mixing 28% of it into a near-white ground darkens the top
+     of the page by about as much as the dark theme's mint accent lightens it —
+     the identical declaration doing the opposite job. Measured at 380px, where
+     both washes are centred on the hero: --muted prose on the 28% wash came out
+     at 4.05-4.49:1 against a 4.5:1 floor, while the same token clears 4.7:1 on
+     white, exactly as its own comment claims. At 12% the worst surface is
+     rgb(212,230,230) and the same ink measures 6.2:1. */
+  --wash-accent: color-mix(in srgb, var(--accent) 12%, transparent);
+  --wash-accent-2: color-mix(in srgb, var(--accent-2) 9%, transparent);
 }
 
 /* ============================================
@@ -63,9 +78,16 @@ body {
   color: var(--text);
   font-family: 'Space Grotesk', sans-serif;
   line-height: 1.5;
+  /* The wash strengths are theme tokens because the same percentage does
+     opposite things in the two themes: in dark, --accent is a mint that
+     LIGHTENS a near-black ground; in light it is a dark teal that DARKENS a
+     near-white one. Both washes centre near the top of the page, which is where
+     the hero sits, and at 380px the page is narrow enough that the hero lands on
+     the strongest part of both — so the hero prose was reading its ink against a
+     surface no token comment in this file describes. */
   background:
-    radial-gradient(circle at 12% 10%, color-mix(in srgb, var(--accent) 28%, transparent), transparent 33%),
-    radial-gradient(circle at 86% 18%, color-mix(in srgb, var(--accent-2) 22%, transparent), transparent 30%),
+    radial-gradient(circle at 12% 10%, var(--wash-accent), transparent 33%),
+    radial-gradient(circle at 86% 18%, var(--wash-accent-2), transparent 30%),
     linear-gradient(165deg, color-mix(in srgb, var(--bg), #000 5%), var(--bg));
 }
 
@@ -130,6 +152,17 @@ body {
   padding-left: env(safe-area-inset-left, 0);
   padding-right: env(safe-area-inset-right, 0);
   display: grid;
+  /* `minmax(0, 1fr)`, not the implicit `auto` a bare `display: grid` gives you.
+     An `auto` track takes its automatic minimum from its widest item's
+     MIN-CONTENT, so ONE panel that cannot narrow sizes the whole page — and
+     because every item then stretches to the track, the element a reflow
+     checker reports is whichever one happens to be widest rather than the one
+     responsible. That is exactly what happened here: at 380px the document
+     measured 441px and the checker named `header.cl-hero` at 433px, whose own
+     min-content is 136px. The real cause was Exhibit 2's ledger row, three
+     panels down, at 405px (see the 740px block). This declaration does not fix
+     that row — it stops the next one from doing the same thing to the page. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
 }
 
@@ -1082,7 +1115,16 @@ button.seg.seg-on {
 .cl-hero-title{margin:0;font-size:clamp(1.6rem,3.8vw,2.7rem);font-weight:700;line-height:1.1;letter-spacing:.01em;}
 .cl-hero-sub{margin:.4rem 0 0;font-size:clamp(.9rem,1.6vw,1.05rem);letter-spacing:.01em;opacity:.85;}
 .cl-hero-desc{margin:.55rem 0 0;font-size:1rem;line-height:1.5;color:var(--muted);max-width:60ch;}
-.cl-hero-why{flex:0 1 min(40%,26rem);min-width:min(100%,15rem);border:1px solid var(--line);border-radius:10px;padding:.85rem 1.05rem;background:color-mix(in oklab,var(--accent) 6%,transparent);}
+/* The aside's fill mixes into --panel rather than into `transparent`. With
+   `transparent` the box had no surface of its own: whatever the body's radial
+   washes happened to paint under it showed straight through, so the ink inside
+   was measured against a different colour at every viewport width. At 380px,
+   where the washes are strongest, `.cl-hero-why-label` in --muted came out at
+   4.45:1 in dark against a 4.5:1 floor and 4.05:1 in light. Compositing over
+   --panel (0.88 alpha in dark, 0.96 in light) gives it the same defined surface
+   every other panel on the page has: the same ink then measures 8.2:1 dark and
+   7.2:1 light. */
+.cl-hero-why{flex:0 1 min(40%,26rem);min-width:min(100%,15rem);border:1px solid var(--line);border-radius:10px;padding:.85rem 1.05rem;background:color-mix(in oklab,var(--accent) 6%,var(--panel));}
 .cl-hero-why-label{display:block;font-size:.68rem;font-weight:700;letter-spacing:.14em;color:var(--muted);}
 .cl-hero-why-text{margin:.35rem 0 0;font-size:.95rem;line-height:1.5;color:var(--text);}
 @media (max-width:640px){.cl-hero{flex-direction:column;}.cl-hero-why{flex-basis:auto;width:100%;}}
@@ -1152,6 +1194,24 @@ button.seg.seg-on {
 
   .cards-three {
     grid-template-columns: 1fr;
+  }
+
+  /* The ledger row is `2.2rem minmax(0, auto) 1fr auto` on desktop, and its
+     last track holds `.ledger-status`, which is `white-space: nowrap`. A bare
+     `auto` track's minimum is its item's min-content, and nowrap makes that the
+     ENTIRE string — "REJECTED double-spend (image already spent)" — so the row
+     could not narrow below 405px. In a 380px viewport that sized `.shell`'s
+     grid track and pushed the whole document to 441px, a WCAG 1.4.10 failure
+     that exists only at phone width, which is a viewport the gate this replaces
+     never opened. Stack the four fields instead, the same way `.controls-row`
+     and `.cards-three` already do here. */
+  .ledger-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2rem;
+  }
+
+  .ledger-status {
+    white-space: normal;
   }
 
   .chain {

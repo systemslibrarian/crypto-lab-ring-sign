@@ -716,10 +716,27 @@ const render = (): void => {
                     const closeOk = isLast && state.ex1ChainWalked && state.ex1ChainClosed;
                     const closeFail = isLast && state.ex1ChainWalked && !state.ex1ChainClosed;
                     const cls = ['chain', lit ? 'active' : '', closeOk ? 'chain-close-ok' : '', closeFail ? 'chain-close-fail' : ''].filter(Boolean).join(' ');
-                    const label = isLast ? `c${i} (should equal c0)` : `challenge ${i}`;
-                    return `<span class="${cls}" aria-label="${label}">c${i === state.ex1Chain.length - 1 ? 'ₙ' : i}=${shortHex(c, 7, 5)}</span>`;
+                    // No `aria-label` here, and its absence is the fix rather
+                    // than an omission. These are role-less <span>s, on which
+                    // ARIA PROHIBITS aria-label: the attribute is silently
+                    // discarded, so it never announced anything — and axe files
+                    // that under `incomplete`, never `violations`, which is
+                    // where the gate this replaces was not looking. It was also
+                    // doing active harm on paper: an accessible name REPLACES
+                    // an element's contents, so `aria-label="challenge 3"` over
+                    // `c3=1a2b3c4…9f0e1` would have hidden the challenge value
+                    // itself — the one thing this readout exists to show.
+                    // The information the labels carried is restated as real
+                    // text in one .sr-only SIBLING after the run (below), not
+                    // per span: `.chain` is the element whose textContent IS the
+                    // challenge value — `claims.spec.ts` parses it and compares
+                    // c_n against c0 — so anything appended inside it would be
+                    // read as part of the hex.
+                    void isLast;
+                    return `<span class="${cls}">c${i === state.ex1Chain.length - 1 ? 'ₙ' : i}=${shortHex(c, 7, 5)}</span>`;
                   })
-                  .join(' <span class="chain-arrow" aria-hidden="true">→</span> ')
+                  .join(' <span class="chain-arrow" aria-hidden="true">→</span> ') +
+                '<span class="sr-only"> — the last value shown is c-n, the final challenge, which should equal c0.</span>'
               : 'run exhibit to animate'
           }</span></p>
           <p><strong>Key image:</strong> <code class="hex-value">${latestSig ? shortHex(latestSig.keyImageHex, 16, 14) : 'not generated'}</code></p>
