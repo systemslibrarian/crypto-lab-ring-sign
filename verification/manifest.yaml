@@ -1,0 +1,128 @@
+repository:
+  url: "https://github.com/systemslibrarian/crypto-lab-ring-sign"
+  default_branch: "main"
+  commit_sha: "77f9107d12c45880d90436c0901554fd523cd82a"
+
+scope_map:
+  files:
+    - path: "src/ring.ts"
+      role: "math_core"
+      note: "LSAG signature arithmetic and logic"
+    - path: "src/group.ts"
+      role: "math_core"
+      note: "Group manager and signature logic"
+    - path: "src/main.ts"
+      role: "ui"
+      note: "DOM manipulation and app entry point"
+    - path: "src/style.css"
+      role: "ui"
+      note: "CSS styles"
+    - path: "src/ring.test.ts"
+      role: "test"
+      note: "Tests for LSAG"
+    - path: "src/group.test.ts"
+      role: "test"
+      note: "Tests for Group signatures"
+    - path: "playwright.config.ts"
+      role: "test"
+      note: "E2E tests config"
+    - path: "vite.config.ts"
+      role: "ui"
+      note: "Build config"
+  entry_points:
+    - "src/main.ts"
+  extraction_order:
+    - "src/ring.ts"
+    - "src/group.ts"
+  red_flags:
+    - "Group signatures in group.ts carry a stable credentialId and memberPublicJwk in the clear, making them trivially linkable by any verifier, violating the core anonymity property of group signatures."
+  scope_amendments: []
+
+coverage:
+  - file: "src/ring.ts"
+    reviewed_symbols: []
+    excluded_symbols: []
+    unresolved_regions:
+      - "RingKeyPair"
+      - "RingMemberPublic"
+      - "LsagSignature"
+      - "VerifierView"
+      - "toVerifierView"
+      - "mod"
+      - "scalarToHex"
+      - "hexToScalar"
+      - "randomScalar"
+      - "utf8"
+      - "concatBytes"
+      - "toArrayBuffer"
+      - "b64UrlToBytes"
+      - "seedToSecretScalarHex"
+      - "pointFromHex"
+      - "hashToScalar"
+      - "HASH_TO_POINT_DST"
+      - "hashPoint"
+      - "encodeRing"
+      - "challengeFor"
+      - "normalizeRingSize"
+      - "generateRingMembers"
+      - "getPublicRing"
+      - "keyImageFromSecret"
+      - "signLsag"
+      - "verifyLsag"
+      - "reconstructChallengeChain"
+      - "flipNibble"
+      - "TamperField"
+      - "tamperLsagSignature"
+      - "detectKeyImageReuse"
+      - "ringSignAndVerify"
+      - "exportPublicKeyForDisplay"
+      - "verifyEd25519WebCryptoRoundtrip"
+      - "decodeHex"
+    note: "Skeleton created in Pass A"
+  - file: "src/group.ts"
+    reviewed_symbols: []
+    excluded_symbols: []
+    unresolved_regions:
+      - "TEXT_ENCODER"
+      - "utf8"
+      - "toArrayBuffer"
+      - "bytesToHex"
+      - "randomHex"
+      - "GroupManager"
+      - "GroupCredential"
+      - "GroupSignature"
+      - "importManagerPrivate"
+      - "importManagerPublic"
+      - "importMemberPrivate"
+      - "importMemberPublic"
+      - "signEcdsaHex"
+      - "hexToBytes"
+      - "verifyEcdsaHex"
+      - "createGroupManager"
+      - "issueCredential"
+      - "groupSign"
+      - "verifyGroupSignature"
+      - "openGroupSignature"
+      - "PseudonymLinkage"
+      - "memberHandle"
+      - "linkageFromWire"
+      - "isRingVsGroupSummary"
+    note: "Skeleton created in Pass A"
+
+audit_mode:
+  type: "pedagogical_model"
+  claimed_boundary: "A demonstration of Linkable Spontaneous Anonymous Group (LSAG) signatures and a contrast with a trivial group signature scheme."
+  intentionally_omitted: []
+  delegated_components:
+    - "@noble/curves (ed25519)"
+    - "Web Crypto API"
+
+lab:
+  slug: "crypto-lab-ring-sign"
+  name: "Ring Sign"
+  claimed_standards:
+    - "LSAG"
+    - "RFC 9380 hash-to-curve"
+  claim_sources:
+    - "README.md"
+    - "src/ring.ts"
