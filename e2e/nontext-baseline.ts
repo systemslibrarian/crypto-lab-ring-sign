@@ -38,9 +38,4 @@ export const NONTEXT_BASELINE: Record<
   // not trip this entry. It would trip the moment the fleet-wide fix lands and
   // the entry has to be deleted, which is the direction that matters.
   'control-boundary|a.cl-btn': { ratio: 1.45, required: 3, unverified: false },
-  'control-boundary|button#cl-theme-toggle.cl-btn.cl-icon': {
-    ratio: 1.45,
-    required: 3,
-    unverified: false,
-  },
 };
