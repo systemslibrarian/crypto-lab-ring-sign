@@ -612,8 +612,8 @@ export async function auditContrast(page: Page, within = 'body *'): Promise<Cont
      * the `#N` index and ✓/✗ glyph on each ledger row (both restated by the
      * row's own status text), the member-id `<span>` inside each `.ring-node`
      * (whose parent carries the same id in its `aria-label`), the `.ring-edges`
-     * SVG, the `.curve-legend`, and the hero's hidden `#theme-toggle`, which is
-     * `hidden` as well because the shared top bar's toggle replaces it.
+     * SVG, and the `.curve-legend`. (The hero's `#theme-toggle` used to be a
+     * member of this set; it is deleted now that dark is the only theme.)
      *
      * Nothing on this page hides a VALUE. No key image, no challenge value, no
      * response scalar, no verdict and no timing number is inside an

@@ -30,8 +30,6 @@ if (!app) {
   throw new Error('Missing #app element');
 }
 
-type ThemeMode = 'dark' | 'light';
-
 type PerfSample = {
   ringSize: number;
   signMs: number;
@@ -137,19 +135,6 @@ const explainer = (summary: string, bodyHtml: string): string => `
     <summary>${summary}</summary>
     <div class="explainer-body">${bodyHtml}</div>
   </details>`;
-
-const getTheme = (): ThemeMode =>
-  document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-
-const setTheme = (theme: ThemeMode): void => {
-  document.documentElement.setAttribute('data-theme', theme);
-  localStorage.setItem('theme', theme);
-};
-
-const themeMeta = (theme: ThemeMode): { icon: string; label: string } =>
-  theme === 'dark'
-    ? { icon: '🌙', label: 'Switch to light mode' }
-    : { icon: '☀️', label: 'Switch to dark mode' };
 
 // Walk the challenge chain one edge at a time. ex1ActiveStep counts edges:
 // step i lights the edge leaving node i (deriving c_{i+1} from c_i). After the
@@ -594,8 +579,6 @@ const scatterPlot = (samples: PerfSample[]): string => {
 };
 
 const render = (): void => {
-  const theme = getTheme();
-  const toggle = themeMeta(theme);
   const latestSig = state.ex1Signature;
   // Everything the page claims a verifier can see is rendered from this, which
   // structurally lacks signerIndex. The privileged index is available only when
@@ -627,7 +610,6 @@ const render = (): void => {
           <span class="cl-hero-why-label">WHY IT MATTERS</span>
           <p class="cl-hero-why-text">Ring signatures give Monero-style spend privacy: membership is provable, the signer stays hidden. Key images stop double-spends without breaking anonymity, and group signatures show the opposite trade — anonymity a manager can revoke.</p>
         </aside>
-        <button id="theme-toggle" class="theme-toggle" type="button" hidden aria-hidden="true" aria-label="${toggle.label}" title="${toggle.label}">${toggle.icon}</button>
       </header>
 
       ${state.error ? `<section class="panel error" role="alert" aria-live="assertive">${state.error}</section>` : ''}
@@ -987,12 +969,6 @@ const render = (): void => {
       </section>
     </main>
   `;
-
-  const themeToggleBtn = document.querySelector<HTMLButtonElement>('#theme-toggle');
-  themeToggleBtn?.addEventListener('click', () => {
-    setTheme(getTheme() === 'dark' ? 'light' : 'dark');
-    render();
-  });
 
   const ringSize = document.querySelector<HTMLInputElement>('#ring-size');
   ringSize?.addEventListener('input', async (event) => {

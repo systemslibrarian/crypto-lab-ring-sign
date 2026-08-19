@@ -45,9 +45,10 @@ export const NARROW = { width: 380, height: 800 };
  *
  *  4. IT REACHED THE LIGHT THEME BY CLICKING THE TOGGLE after `goto`, so every
  *     light-theme scan measured a page repainted mid-life rather than one that
- *     loaded that way. The theme is seeded through `localStorage` here, which
- *     also pins down whether the anti-flash script and the toggle agree on the
- *     key.
+ *     loaded that way. There is no toggle to click now, and dark is the only
+ *     theme; the theme is seeded through `localStorage` here, which pins down
+ *     that the anti-flash script overwrites a stored preference rather than
+ *     obeying it.
  *
  *  5. `violations` IS NOT THE WHOLE ORACLE, and the 1.4.11 test that was meant
  *     to cover part of the gap pointed at the wrong place. It measured
@@ -184,13 +185,11 @@ export async function assertSingleBanner(page: Page): Promise<void> {
  * the emulation is applied imperatively BEFORE the navigation and then
  * *asserted* from inside the page.
  *
- * The theme is seeded through `localStorage` rather than by clicking the toggle,
- * which also pins down a real failure mode: `index.html`'s anti-flash script
- * reads `localStorage.getItem('theme')`, the shared bar's toggle writes
- * `localStorage.setItem('theme', …)`, and `main.ts`'s own `setTheme()` writes
- * the same key a third time. If any of the three drifted the theme would
- * silently stop persisting, and this boot fails on `data-theme` rather than
- * quietly scanning dark twice.
+ * The theme is seeded through `localStorage` rather than reached by clicking a
+ * control, because there is no control: dark is pinned by a literal in
+ * `index.html`'s boot script, which overwrites any stored `theme` before first
+ * paint. Seeding the key and then asserting `data-theme` keeps the two ends of
+ * that contract — the stored key and the resolved attribute — checked together.
  *
  * The defaults are asserted at length because `init()` is ASYNC and does real
  * Ed25519 key generation plus a sanity sign-and-verify before the first
@@ -275,14 +274,19 @@ export async function boot(page: Page, theme: 'dark' | 'light'): Promise<void> {
   await expect(page.locator('details.explainer')).toHaveCount(4);
   await expect(page.locator('details[open]')).toHaveCount(0);
 
-  // The lab's own theme toggle is `hidden` because the shared bar replaces it.
-  // `[hidden]` is specificity (0,1,0) — the same as a class — so a later
-  // `.theme-toggle { display: … }` would silently defeat it. Read the computed
-  // value rather than trusting the attribute.
-  expect(
-    await page.evaluate(() => getComputedStyle(document.querySelector('#theme-toggle')!).display),
-    '[hidden] must actually resolve to display:none on the lab theme toggle'
-  ).toBe('none');
+  // Dark is the only theme, so no theme control is BUILT any more. This used to
+  // assert the lab's own toggle computed to `display: none` — but that only
+  // proved it was invisible, while `render()` still emitted the button and still
+  // wired a click handler that flipped `data-theme` and wrote `localStorage`.
+  // The single inline `display:none !important` rule in `index.html` was the
+  // only thing standing between a visitor and a live toggle. The markup, the
+  // handler and the `getTheme`/`setTheme`/`themeMeta` helpers are deleted, so
+  // assert ABSENCE — a rule that can be defeated by specificity is no longer
+  // load-bearing, and a returning toggle now fails here rather than hiding.
+  await expect(
+    page.locator('#theme-toggle, #themeToggle, .theme-toggle, [data-theme-toggle]'),
+    'no theme control may exist in the DOM'
+  ).toHaveCount(0);
 
   await settle(page);
   await expectNotBlank(page, `${theme} first paint`);
