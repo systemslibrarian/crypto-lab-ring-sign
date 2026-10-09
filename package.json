@@ -7,7 +7,6 @@
     "dev": "vite",
     "build": "npm run test:publish-request && tsc && vite build",
     "preview": "vite preview",
-    "predeploy": "npm run build",
     "deploy": "gh workflow run pages.yml --repo systemslibrarian/crypto-lab-ring-sign --ref main",
     "test": "vitest run",
     "test:a11y": "playwright test",
