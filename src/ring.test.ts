@@ -255,9 +255,33 @@ describe('LSAG rejects malformed / small-order points', () => {
     const bad: LsagSignature = { ...sig, keyImageHex: torsionHex };
     await expect(verifyLsag('m', bad)).resolves.toBe(false);
   });
+
+  it('returns false rather than throwing for malformed wire encodings', async () => {
+    const members = await generateRingMembers(3);
+    const sig = await signLsag('m', members, 0);
+    const malformed: LsagSignature[] = [
+      { ...sig, c0Hex: 'zz'.repeat(32) },
+      { ...sig, responsesHex: ['not-hex', ...sig.responsesHex.slice(1)] },
+      { ...sig, keyImageHex: '00' },
+      {
+        ...sig,
+        ring: [{ ...sig.ring[0], publicKeyHex: sig.ring[0].publicKeyHex.toUpperCase() }, ...sig.ring.slice(1)]
+      }
+    ];
+    for (const candidate of malformed) {
+      await expect(verifyLsag('m', candidate)).resolves.toBe(false);
+    }
+  });
+
+  it('refuses duplicate public keys instead of inflating the nominal anonymity set', async () => {
+    const members = await generateRingMembers(2);
+    await expect(signLsag('duplicate-ring', [members[0], members[0]], 0)).rejects.toThrow(
+      /distinct/
+    );
+  });
 });
 
-describe('scalar reduction / randomScalar regression guards', () => {
+describe('canonical scalar and randomScalar regression guards', () => {
   it('decodeHex round-trips a known vector', () => {
     const bytes = decodeHex('00ff10ab');
     expect(Array.from(bytes)).toEqual([0x00, 0xff, 0x10, 0xab]);
@@ -273,6 +297,28 @@ describe('scalar reduction / randomScalar regression guards', () => {
     }
     expect(sig.c0Hex).toMatch(/^[0-9a-f]{64}$/);
     expect(BigInt(`0x${sig.c0Hex}`)).toBeLessThan(L);
+  });
+
+  it('rejects noncanonical c0 and response encodings instead of reducing them modulo L', async () => {
+    const members = await generateRingMembers(4);
+    const sig = await signLsag('canonical-wire', members, 1);
+    const L = ed25519.Point.Fn.ORDER;
+    const plusOrder = (hex: string): string =>
+      (BigInt(`0x${hex}`) + L).toString(16).padStart(64, '0');
+
+    await expect(
+      verifyLsag('canonical-wire', { ...sig, c0Hex: plusOrder(sig.c0Hex) })
+    ).resolves.toBe(false);
+    await expect(
+      verifyLsag('canonical-wire', {
+        ...sig,
+        responsesHex: [plusOrder(sig.responsesHex[0]), ...sig.responsesHex.slice(1)]
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('decodeHex rejects non-hex input rather than coercing it to zero bytes', () => {
+    expect(() => decodeHex('00zz')).toThrow(/hexadecimal/);
   });
 });
 
