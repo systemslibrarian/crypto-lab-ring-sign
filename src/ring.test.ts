@@ -70,8 +70,14 @@ describe('LSAG rejects forgeries and tampering', () => {
   it('rejects a tampered response (chain no longer closes at c0)', async () => {
     const members = await generateRingMembers(4);
     const sig = await signLsag('pay-alice', members, 1);
+    const clean = await reconstructChallengeChain('pay-alice', sig);
     const forged = tamperLsagSignature(sig, 'response');
     await expect(verifyLsag('pay-alice', forged)).resolves.toBe(false);
+    const broken = await reconstructChallengeChain('pay-alice', forged);
+    expect(broken).toHaveLength(clean.length);
+    expect(broken[0]).toBe(clean[0]);
+    expect(broken.slice(1).every((challenge, index) => challenge !== clean[index + 1])).toBe(true);
+    expect(broken[broken.length - 1]).not.toBe(broken[0]);
   });
 
   it('rejects a tampered c0', async () => {

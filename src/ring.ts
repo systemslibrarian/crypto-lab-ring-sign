@@ -363,15 +363,14 @@ export const reconstructChallengeChain = async (
   return chain;
 };
 
-// Flip a single hex nibble so the value provably changes (never returns the input).
-const flipNibble = (hex: string, index = 0): string => {
-  if (hex.length === 0) {
-    return hex;
-  }
-  const i = Math.min(index, hex.length - 1);
-  const current = Number.parseInt(hex[i], 16);
-  const next = ((current + 1) % 16).toString(16);
-  return hex.slice(0, i) + next + hex.slice(i + 1);
+// Change a scalar while keeping its wire encoding canonical. Flipping the most
+// significant nibble can push a valid scalar above the curve order; the strict
+// verifier then correctly rejects before reconstructing the chain, which makes
+// the teaching animation preserve the old clean chain. Moving by one inside
+// [0, L) guarantees both a changed signature and a recomputable broken chain.
+const changeCanonicalScalar = (hex: string): string => {
+  const scalar = hexToScalar(hex);
+  return scalarToHex(scalar === 0n ? 1n : scalar - 1n);
 };
 
 export type TamperField = 'response' | 'c0';
@@ -389,9 +388,9 @@ export const tamperLsagSignature = (
     responsesHex: [...signature.responsesHex]
   };
   if (field === 'response') {
-    clone.responsesHex[0] = flipNibble(clone.responsesHex[0]);
+    clone.responsesHex[0] = changeCanonicalScalar(clone.responsesHex[0]);
   } else {
-    clone.c0Hex = flipNibble(clone.c0Hex);
+    clone.c0Hex = changeCanonicalScalar(clone.c0Hex);
   }
   return clone;
 };
