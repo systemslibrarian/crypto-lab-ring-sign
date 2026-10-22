@@ -58,9 +58,12 @@ const signEcdsaHex = async (privateKey: CryptoKey, payload: string): Promise<str
   return bytesToHex(new Uint8Array(sig));
 };
 
-const hexToBytes = (hex: string): Uint8Array => {
-  if (hex.length % 2 !== 0) {
-    throw new Error('hex length must be even');
+const hexToBytes = (hex: string, expectedBytes?: number): Uint8Array => {
+  if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) {
+    throw new Error('hex must be non-empty, even-length, and contain only hexadecimal digits');
+  }
+  if (expectedBytes !== undefined && hex.length !== expectedBytes * 2) {
+    throw new Error(`hex must encode exactly ${expectedBytes} bytes`);
   }
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i += 1) {
@@ -69,13 +72,18 @@ const hexToBytes = (hex: string): Uint8Array => {
   return out;
 };
 
-const verifyEcdsaHex = async (publicKey: CryptoKey, payload: string, signatureHex: string): Promise<boolean> =>
-  crypto.subtle.verify(
-    { name: 'ECDSA', hash: 'SHA-256' },
-    publicKey,
-    toArrayBuffer(hexToBytes(signatureHex)),
-    toArrayBuffer(utf8(payload))
-  );
+const verifyEcdsaHex = async (publicKey: CryptoKey, payload: string, signatureHex: string): Promise<boolean> => {
+  try {
+    return await crypto.subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      publicKey,
+      toArrayBuffer(hexToBytes(signatureHex, 64)),
+      toArrayBuffer(utf8(payload))
+    );
+  } catch {
+    return false;
+  }
+};
 
 export const createGroupManager = async (): Promise<GroupManager> => {
   const pair = await crypto.subtle.generateKey(
@@ -148,31 +156,46 @@ export const verifyGroupSignature = async (
   managerPublicJwk: JsonWebKey,
   signature: GroupSignature
 ): Promise<boolean> => {
-  const managerPublic = await importManagerPublic(managerPublicJwk);
-  const managerOk = await verifyEcdsaHex(managerPublic, signature.issuedPayload, signature.managerSignatureHex);
-  if (!managerOk) {
-    return false;
-  }
+  // Malformed wire data is a rejected signature, not an exception that can
+  // escape into whichever UI or protocol happened to call the verifier.
+  try {
+    if (!/^[0-9a-f]{24}$/.test(signature.credentialId)) return false;
+    if (!/^[0-9a-f]{32}$/.test(signature.nonceHex)) return false;
 
-  const payload = JSON.parse(signature.issuedPayload) as {
-    credentialId: string;
-    memberPublicJwk: JsonWebKey;
-  };
-  if (payload.credentialId !== signature.credentialId) {
-    return false;
-  }
-  if (JSON.stringify(payload.memberPublicJwk) !== JSON.stringify(signature.memberPublicJwk)) {
-    return false;
-  }
-  const signingPayload = JSON.stringify({
-    v: 1,
-    message: signature.message,
-    credentialId: signature.credentialId,
-    nonceHex: signature.nonceHex
-  });
+    const managerPublic = await importManagerPublic(managerPublicJwk);
+    const managerOk = await verifyEcdsaHex(managerPublic, signature.issuedPayload, signature.managerSignatureHex);
+    if (!managerOk) {
+      return false;
+    }
 
-  const memberPublic = await importMemberPublic(payload.memberPublicJwk);
-  return verifyEcdsaHex(memberPublic, signingPayload, signature.memberSignatureHex);
+    const parsed: unknown = JSON.parse(signature.issuedPayload);
+    if (!parsed || typeof parsed !== 'object') return false;
+    const payload = parsed as {
+      v?: unknown;
+      credentialId?: unknown;
+      memberPublicJwk?: unknown;
+    };
+    if (payload.v !== 1 || payload.credentialId !== signature.credentialId) {
+      return false;
+    }
+    if (!payload.memberPublicJwk || typeof payload.memberPublicJwk !== 'object') {
+      return false;
+    }
+    if (JSON.stringify(payload.memberPublicJwk) !== JSON.stringify(signature.memberPublicJwk)) {
+      return false;
+    }
+    const signingPayload = JSON.stringify({
+      v: 1,
+      message: signature.message,
+      credentialId: signature.credentialId,
+      nonceHex: signature.nonceHex
+    });
+
+    const memberPublic = await importMemberPublic(payload.memberPublicJwk as JsonWebKey);
+    return verifyEcdsaHex(memberPublic, signingPayload, signature.memberSignatureHex);
+  } catch {
+    return false;
+  }
 };
 
 export const openGroupSignature = (manager: GroupManager, signature: GroupSignature): string | null =>

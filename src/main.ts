@@ -71,6 +71,7 @@ const state: {
   ex1Tamper: TamperResult | null;
   ex1RevealSigner: boolean;
   ex1VerifierView: boolean;
+  ex1Busy: boolean;
   ex2MessageA: string;
   ex2MessageB: string;
   ex2SignerIndexB: number;
@@ -82,10 +83,12 @@ const state: {
     signerB: number;
   } | null;
   ex2Ledger: { image: string; label: string; accepted: boolean }[];
+  ex2Busy: boolean;
   ex3Curve: PerfSample[];
   ex3Busy: boolean;
   group: GroupState;
   groupMessage: string;
+  groupBusy: boolean;
   error: string | null;
 } = {
   ringSize: 5,
@@ -101,11 +104,13 @@ const state: {
   ex1Tamper: null,
   ex1RevealSigner: false,
   ex1VerifierView: false,
+  ex1Busy: false,
   ex2MessageA: 'Spend output #a1',
   ex2MessageB: 'Spend output #a1 again',
   ex2SignerIndexB: 1,
   ex2Result: null,
   ex2Ledger: [],
+  ex2Busy: false,
   ex3Curve: [],
   ex3Busy: false,
   group: {
@@ -119,8 +124,32 @@ const state: {
     linkage: null
   },
   groupMessage: 'Approve shielded settlement #42',
+  groupBusy: false,
   error: null
 };
+
+// Async operations are bound to the inputs that started them. Incrementing a
+// generation retires every older continuation, so a slow sign/key-generation
+// promise cannot repaint evidence over newer inputs.
+let ringSetupGeneration = 0;
+let ex1Generation = 0;
+let ex2Generation = 0;
+let groupGeneration = 0;
+
+const escapeHtml = (value: string): string =>
+  value.replace(/[&<>"']/g, (character) => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    };
+    return entities[character];
+  });
+
+const delay = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 const shortHex = (hex: string, left = 10, right = 8): string => {
   if (hex.length <= left + right + 3) {
@@ -149,23 +178,26 @@ const explainer = (summary: string, bodyHtml: string): string => `
 const chainActuallyCloses = (chain: string[]): boolean =>
   chain.length > 1 && chain[chain.length - 1] === chain[0];
 
-const animateChallengeChain = async (): Promise<void> => {
-  const n = state.members.length;
+const animateChallengeChain = async (generation: number, ringSize: number): Promise<boolean> => {
+  if (generation !== ex1Generation) return false;
   state.ex1ChainClosed = false;
   state.ex1ChainWalked = false;
   state.ex1ActiveStep = -1;
   render();
-  for (let i = 0; i < n; i += 1) {
+  for (let i = 0; i < ringSize; i += 1) {
+    if (generation !== ex1Generation) return false;
     state.ex1ActiveStep = i;
     render();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await delay(300);
+    if (generation !== ex1Generation) return false;
   }
   // The walk has returned to node 0. Snap the closing connector shut only if the
   // recomputed final challenge really equals c0 and verification really passed.
   state.ex1ChainWalked = true;
   state.ex1ChainClosed = chainActuallyCloses(state.ex1Chain) && state.ex1Verified;
   render();
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  await delay(200);
+  return generation === ex1Generation;
 };
 
 // Everything in Exhibit 1 that is a claim ABOUT one particular signature: the
@@ -173,7 +205,7 @@ const animateChallengeChain = async (): Promise<void> => {
 // readout and the privileged reveal. A verdict is only true of the message and
 // ring it was computed over, so whenever that subject changes the verdict has to
 // be retracted rather than left standing over inputs it never saw.
-const retractExhibit1Verdict = (): void => {
+const clearExhibit1Verdict = (): void => {
   state.ex1Signature = null;
   state.ex1Verified = false;
   state.ex1Chain = [];
@@ -184,12 +216,46 @@ const retractExhibit1Verdict = (): void => {
   state.ex1RevealSigner = false;
 };
 
-const setupRing = async (ringSize: number): Promise<void> => {
-  state.ringSize = ringSize;
-  state.members = await generateRingMembers(ringSize);
-  state.signerIndex = Math.min(state.signerIndex, ringSize - 1);
-  retractExhibit1Verdict();
+const retractExhibit1Verdict = (): void => {
+  ex1Generation += 1;
+  state.ex1Busy = false;
+  clearExhibit1Verdict();
+};
+
+const retireExhibit2Evidence = (clearLedger = false): void => {
+  ex2Generation += 1;
+  state.ex2Busy = false;
   state.ex2Result = null;
+  if (clearLedger) state.ex2Ledger = [];
+};
+
+const retireGroupEvidence = (): void => {
+  groupGeneration += 1;
+  state.groupBusy = false;
+  state.group.latestSignature = null;
+  state.group.verified = false;
+  state.group.openedMember = null;
+  state.group.linkage = null;
+};
+
+const setupRing = async (ringSize: number): Promise<boolean> => {
+  const generation = ++ringSetupGeneration;
+  // The old proof and ledger are statements about the old public-key set. Tear
+  // them down immediately, before the replacement keys finish generating.
+  retractExhibit1Verdict();
+  retireExhibit2Evidence(true);
+  const members = await generateRingMembers(ringSize);
+  if (generation !== ringSetupGeneration) return false;
+  // A learner could start an operation against the old ring while key
+  // generation was pending. Retire that later request too before publishing
+  // the replacement ring.
+  retractExhibit1Verdict();
+  retireExhibit2Evidence(true);
+  state.ringSize = ringSize;
+  state.members = members;
+  state.signerIndex = Math.min(state.signerIndex, ringSize - 1);
+  state.ex2SignerIndexB = Math.min(state.ex2SignerIndexB, ringSize - 1);
+  return true;
 };
 
 const setupGroup = async (): Promise<void> => {
@@ -211,15 +277,33 @@ const setupGroup = async (): Promise<void> => {
 };
 
 const runExhibit1 = async (): Promise<void> => {
-  const signature = await signLsag(state.ex1Message, state.members, state.signerIndex);
-  const verified = await verifyLsag(state.ex1Message, signature);
-  const chain = await reconstructChallengeChain(state.ex1Message, signature);
-  state.ex1Signature = signature;
-  state.ex1Verified = verified;
-  state.ex1Chain = chain;
-  state.ex1Tamper = null;
-  state.ex1RevealSigner = false;
-  await animateChallengeChain();
+  const generation = ++ex1Generation;
+  const message = state.ex1Message;
+  const members = [...state.members];
+  const signerIndex = state.signerIndex;
+  state.ex1Busy = true;
+  clearExhibit1Verdict();
+  render();
+  try {
+    const signature = await signLsag(message, members, signerIndex);
+    if (generation !== ex1Generation) return;
+    const verified = await verifyLsag(message, signature);
+    if (generation !== ex1Generation) return;
+    const chain = await reconstructChallengeChain(message, signature);
+    if (generation !== ex1Generation) return;
+    state.ex1Signature = signature;
+    state.ex1Verified = verified;
+    state.ex1Chain = chain;
+    state.ex1Tamper = null;
+    state.ex1RevealSigner = false;
+    if (!(await animateChallengeChain(generation, members.length))) return;
+    state.ex1Busy = false;
+  } catch (error) {
+    if (generation === ex1Generation) {
+      state.ex1Busy = false;
+      throw error;
+    }
+  }
 };
 
 const safeVerify = async (message: string, signature: LsagSignature): Promise<boolean> => {
@@ -243,32 +327,49 @@ const safeReconstruct = async (
 };
 
 const runExhibit1Tamper = async (kind: TamperKind): Promise<void> => {
-  if (!state.ex1Signature) {
+  if (!state.ex1Signature || state.ex1Busy) {
     return;
   }
+  const generation = ++ex1Generation;
+  const signature = state.ex1Signature;
+  const message = state.ex1Message;
+  const ringSize = state.members.length;
+  state.ex1Busy = true;
+  render();
   let verified: boolean;
   let chain: string[];
-  if (kind === 'message') {
-    // Same signature, but the verifier checks a different message than was signed.
-    const modified = `${state.ex1Message} (modified)`;
-    verified = await safeVerify(modified, state.ex1Signature);
-    // Reconstruct against the intact ring but the changed message: because the
-    // challenge is hashed over the message, every c_i shifts and the loop misses c0.
-    const rebound: LsagSignature = { ...state.ex1Signature, message: modified };
-    chain = await safeReconstruct(modified, rebound);
-  } else {
-    // Flip one byte of a response so the challenge chain no longer closes at c0.
-    const corrupted = tamperLsagSignature(state.ex1Signature, 'response');
-    verified = await safeVerify(state.ex1Message, corrupted);
-    chain = await safeReconstruct(state.ex1Message, corrupted);
+  try {
+    if (kind === 'message') {
+      // Same signature, but the verifier checks a different message than was signed.
+      const modified = `${message} (modified)`;
+      verified = await safeVerify(modified, signature);
+      if (generation !== ex1Generation) return;
+      // Reconstruct against the intact ring but the changed message: because the
+      // challenge is hashed over the message, every c_i shifts and the loop misses c0.
+      const rebound: LsagSignature = { ...signature, message: modified };
+      chain = await safeReconstruct(modified, rebound);
+    } else {
+      // Flip one byte of a response so the challenge chain no longer closes at c0.
+      const corrupted = tamperLsagSignature(signature, 'response');
+      verified = await safeVerify(message, corrupted);
+      if (generation !== ex1Generation) return;
+      chain = await safeReconstruct(message, corrupted);
+    }
+    if (generation !== ex1Generation) return;
+    state.ex1Tamper = { kind, verified, chain };
+    // Show the walk in the ring, then derive closure from the tampered chain the
+    // verifier actually recomputed — not from the assumption that tampering fails.
+    state.ex1Chain = chain.length > 0 ? chain : state.ex1Chain;
+    state.ex1ActiveStep = ringSize - 1;
+    state.ex1ChainWalked = true;
+    state.ex1ChainClosed = chainActuallyCloses(chain) && verified;
+    state.ex1Busy = false;
+  } catch (error) {
+    if (generation === ex1Generation) {
+      state.ex1Busy = false;
+      throw error;
+    }
   }
-  state.ex1Tamper = { kind, verified, chain };
-  // Show the walk in the ring, then derive closure from the tampered chain the
-  // verifier actually recomputed — not from the assumption that tampering fails.
-  state.ex1Chain = chain.length > 0 ? chain : state.ex1Chain;
-  state.ex1ActiveStep = state.members.length - 1;
-  state.ex1ChainWalked = true;
-  state.ex1ChainClosed = chainActuallyCloses(chain) && verified;
 };
 
 // A ledger records every key image a "network node" has already accepted. A
@@ -287,25 +388,42 @@ const runExhibit2 = async (): Promise<void> => {
   // detectKeyImageReuse could only ever return true and the "no reuse" branch
   // below was unreachable — the ledger's REJECTED line was a foregone
   // conclusion of control flow rather than a fact about the key images.
-  const signerB = Math.min(state.ex2SignerIndexB, state.members.length - 1);
-  const a = await signLsag(state.ex2MessageA, state.members, state.signerIndex);
-  const b = await signLsag(state.ex2MessageB, state.members, signerB);
-  const reuse = detectKeyImageReuse([a.keyImageHex, b.keyImageHex]);
-  // Push both signings at the ledger in order; a repeated image is rejected.
-  ledgerSubmit(a.keyImageHex, state.ex2MessageA);
-  ledgerSubmit(b.keyImageHex, state.ex2MessageB);
-  state.ex2Result = {
-    keyImageA: a.keyImageHex,
-    keyImageB: b.keyImageHex,
-    reused: reuse.reused,
-    signerA: state.signerIndex,
-    signerB
-  };
+  const generation = ++ex2Generation;
+  const members = [...state.members];
+  const messageA = state.ex2MessageA;
+  const messageB = state.ex2MessageB;
+  const signerA = state.signerIndex;
+  const signerB = Math.min(state.ex2SignerIndexB, members.length - 1);
+  state.ex2Busy = true;
+  state.ex2Result = null;
+  render();
+  try {
+    const a = await signLsag(messageA, members, signerA);
+    if (generation !== ex2Generation) return;
+    const b = await signLsag(messageB, members, signerB);
+    if (generation !== ex2Generation) return;
+    const reuse = detectKeyImageReuse([a.keyImageHex, b.keyImageHex]);
+    // Push both signings at the ledger in order; a repeated image is rejected.
+    ledgerSubmit(a.keyImageHex, messageA);
+    ledgerSubmit(b.keyImageHex, messageB);
+    state.ex2Result = {
+      keyImageA: a.keyImageHex,
+      keyImageB: b.keyImageHex,
+      reused: reuse.reused,
+      signerA,
+      signerB
+    };
+    state.ex2Busy = false;
+  } catch (error) {
+    if (generation === ex2Generation) {
+      state.ex2Busy = false;
+      throw error;
+    }
+  }
 };
 
 const resetLedger = (): void => {
-  state.ex2Ledger = [];
-  state.ex2Result = null;
+  retireExhibit2Evidence(true);
 };
 
 const RING_SIZES = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
@@ -354,16 +472,34 @@ const runExhibit4Sign = async (): Promise<void> => {
   if (!state.group.manager || state.group.credentials.length === 0) {
     return;
   }
+  const generation = ++groupGeneration;
+  const manager = state.group.manager;
   const credential = state.group.credentials[state.group.selected];
-  const signature = await groupSign(state.groupMessage, credential);
-  const verified = await verifyGroupSignature(state.group.manager.managerPublicJwk, signature);
-  state.group.latestSignature = signature;
-  state.group.verified = verified;
+  const message = state.groupMessage;
+  state.groupBusy = true;
+  state.group.latestSignature = null;
+  state.group.verified = false;
   state.group.openedMember = null;
-  // Keep every signature a verifier has seen, so the readout can compute what a
-  // verifier can correlate rather than assert that it can correlate nothing.
-  state.group.history.push(signature);
-  state.group.linkage = linkageFromWire(signature, state.group.history);
+  state.group.linkage = null;
+  render();
+  try {
+    const signature = await groupSign(message, credential);
+    if (generation !== groupGeneration) return;
+    const verified = await verifyGroupSignature(manager.managerPublicJwk, signature);
+    if (generation !== groupGeneration) return;
+    state.group.latestSignature = signature;
+    state.group.verified = verified;
+    // Keep every completed signature a verifier has seen, so the readout can
+    // compute correlation rather than assert that it can correlate nothing.
+    state.group.history.push(signature);
+    state.group.linkage = linkageFromWire(signature, state.group.history);
+    state.groupBusy = false;
+  } catch (error) {
+    if (generation === groupGeneration) {
+      state.groupBusy = false;
+      throw error;
+    }
+  }
 };
 
 const runExhibit4Open = (): void => {
@@ -612,7 +748,7 @@ const render = (): void => {
         </aside>
       </header>
 
-      ${state.error ? `<section class="panel error" role="alert" aria-live="assertive">${state.error}</section>` : ''}
+      ${state.error ? `<section class="panel error" role="alert" aria-live="assertive">${escapeHtml(state.error)}</section>` : ''}
 
       <section class="panel preamble" aria-labelledby="preamble-title">
         <div class="panel-head">
@@ -658,9 +794,9 @@ const render = (): void => {
             </select>
           </label>
           <label for="ex1-message">Message
-            <input id="ex1-message" type="text" value="${state.ex1Message}" />
+            <input id="ex1-message" type="text" value="${escapeHtml(state.ex1Message)}" />
           </label>
-          <button id="ex1-run" type="button">Sign and Verify</button>
+          <button id="ex1-run" type="button" ${state.ex1Busy ? 'disabled aria-busy="true"' : ''}>${state.ex1Busy ? 'Signing…' : 'Sign and Verify'}</button>
         </fieldset>
         <div class="view-switch" role="group" aria-label="Whose view of the ring to show">
           <span class="view-switch-label" id="view-switch-label">Whose view:</span>
@@ -757,8 +893,8 @@ const render = (): void => {
         <div class="tamper">
           <p class="tamper-head"><strong>Try to break it</strong> — a valid signature must close the chain at c0 and bind to its exact message:</p>
           <div class="tamper-row">
-            <button id="ex1-tamper-response" type="button" class="ghost">Flip one byte of a response</button>
-            <button id="ex1-tamper-message" type="button" class="ghost">Verify against a modified message</button>
+            <button id="ex1-tamper-response" type="button" class="ghost" ${state.ex1Busy ? 'disabled' : ''}>Flip one byte of a response</button>
+            <button id="ex1-tamper-message" type="button" class="ghost" ${state.ex1Busy ? 'disabled' : ''}>Verify against a modified message</button>
           </div>
           ${
             state.ex1Tamper
@@ -798,18 +934,18 @@ const render = (): void => {
         <fieldset class="controls-row">
           <legend class="sr-only">Key image linkability controls</legend>
           <label for="ex2-message-a">Message A
-            <input id="ex2-message-a" type="text" value="${state.ex2MessageA}" />
+            <input id="ex2-message-a" type="text" value="${escapeHtml(state.ex2MessageA)}" />
           </label>
           <label for="ex2-message-b">Message B
-            <input id="ex2-message-b" type="text" value="${state.ex2MessageB}" />
+            <input id="ex2-message-b" type="text" value="${escapeHtml(state.ex2MessageB)}" />
           </label>
           <label for="ex2-signer-b">Signer of spend B (spend A is signed by ${state.members[state.signerIndex]?.id ?? '—'})
             <select id="ex2-signer-b">
               ${state.members.map((m, i) => `<option value="${i}" ${i === Math.min(state.ex2SignerIndexB, state.members.length - 1) ? 'selected' : ''}>${m.id}${i === state.signerIndex ? ' (same signer)' : ''}</option>`).join('')}
             </select>
           </label>
-          <button id="ex2-run" type="button">Submit Both Spends To The Ledger</button>
-          <button id="ex2-reset" type="button" class="ghost" ${state.ex2Ledger.length > 0 ? '' : 'disabled'}>Clear ledger</button>
+          <button id="ex2-run" type="button" ${state.ex2Busy ? 'disabled aria-busy="true"' : ''}>${state.ex2Busy ? 'Submitting…' : 'Submit Both Spends To The Ledger'}</button>
+          <button id="ex2-reset" type="button" class="ghost" ${state.ex2Ledger.length > 0 || state.ex2Busy ? '' : 'disabled'}>${state.ex2Busy ? 'Cancel pending submission' : 'Clear ledger'}</button>
         </fieldset>
         <div class="info-grid" aria-live="polite" role="status">
           <p><strong>Key image A:</strong> <code class="hex-value">${ex2 ? shortHex(ex2.keyImageA, 16, 14) : 'pending'}</code></p>
@@ -840,7 +976,7 @@ const render = (): void => {
                 return `<li class="ledger-row ${cls}">
                   <span class="ledger-idx" aria-hidden="true">#${i + 1}</span>
                   <code class="ledger-image">${shortHex(e.image, 12, 10)}</code>
-                  <span class="ledger-msg">${e.label}</span>
+                  <span class="ledger-msg">${escapeHtml(e.label)}</span>
                   <span class="ledger-status"><span aria-hidden="true">${icon}</span> ${statusText}</span>
                 </li>`;
               })
@@ -905,28 +1041,28 @@ const render = (): void => {
           <legend class="sr-only">Group signature controls</legend>
           <label for="group-member">Member credential
             <select id="group-member">
-              ${group.credentials.map((c, i) => `<option value="${i}" ${i === group.selected ? 'selected' : ''}>${c.memberId}</option>`).join('')}
+              ${group.credentials.map((c, i) => `<option value="${i}" ${i === group.selected ? 'selected' : ''}>${escapeHtml(c.memberId)}</option>`).join('')}
             </select>
           </label>
           <label for="group-message">Message
-            <input id="group-message" type="text" value="${state.groupMessage}" />
+            <input id="group-message" type="text" value="${escapeHtml(state.groupMessage)}" />
           </label>
-          <button id="group-sign" type="button">Anonymous Group Sign</button>
-          <button id="group-open" type="button" ${group.latestSignature ? '' : 'disabled'} aria-describedby="open-desc">Manager Open Signature</button>
+          <button id="group-sign" type="button" ${state.groupBusy ? 'disabled aria-busy="true"' : ''}>${state.groupBusy ? 'Signing…' : 'Anonymous Group Sign'}</button>
+          <button id="group-open" type="button" ${group.latestSignature && !state.groupBusy ? '' : 'disabled'} aria-describedby="open-desc">Manager Open Signature</button>
           <span id="open-desc" class="sr-only">Reveals which group member produced the signature</span>
         </fieldset>
         <div class="info-grid" aria-live="polite" role="status">
           <p><strong>Verifier result:</strong> ${group.verified ? '<span class="ok">valid group credential + member signature</span>' : '<span class="muted">no signature yet</span>'}</p>
           <p><strong>Signer identity to verifier:</strong> ${
             group.linkage
-              ? `real-world name hidden — the registry that maps credentials to people is the manager's. But the signature is <strong>pseudonymous, not anonymous</strong>: it carries credential <code>${group.linkage.pseudonym}</code> and the member's public key in the clear. Signatures collected in this session: ${group.history.length} across ${group.linkage.distinctSigners} distinct signer${group.linkage.distinctSigners === 1 ? '' : 's'}; <strong>${group.linkage.linkedCount}</strong> of them share this pseudonym${
+              ? `real-world name hidden — the registry that maps credentials to people is the manager's. But the signature is <strong>pseudonymous, not anonymous</strong>: it carries credential <code>${escapeHtml(group.linkage.pseudonym)}</code> and the member's public key in the clear. Signatures collected in this session: ${group.history.length} across ${group.linkage.distinctSigners} distinct signer${group.linkage.distinctSigners === 1 ? '' : 's'}; <strong>${group.linkage.linkedCount}</strong> of them share this pseudonym${
                   group.linkage.stableFields.length > 0
-                    ? `, linked by the fields <code>${group.linkage.stableFields.join(', ')}</code>, which were byte-identical across every one of them`
+                    ? `, linked by the fields <code>${escapeHtml(group.linkage.stableFields.join(', '))}</code>, which were byte-identical across every one of them`
                     : ''
                 }. Any verifier can do that grouping; no manager needed.`
               : 'no signature yet'
           }</p>
-          <p><strong>Manager open result:</strong> ${group.openedMember ?? 'not opened yet'}</p>
+          <p><strong>Manager open result:</strong> ${group.openedMember ? escapeHtml(group.openedMember) : 'not opened yet'}</p>
           <p><strong>Ring vs Group:</strong> ${compareLine}</p>
         </div>
         <p class="note caveat"><strong>Teaching honesty:</strong> this exhibit sends each member's P-256 public key in the clear inside every signature, so two signatures from the same member are trivially linkable and only the credential-to-identity mapping is hidden. A production scheme (e.g. BBS+ / randomizable credentials) hides the member key itself, making even repeat signatures unlinkable to everyone but the manager. Read this as a model of the <em>accountability</em> property, not of full unlinkability.</p>
@@ -973,14 +1109,18 @@ const render = (): void => {
   const ringSize = document.querySelector<HTMLInputElement>('#ring-size');
   ringSize?.addEventListener('input', async (event) => {
     const target = event.target as HTMLInputElement;
-    await setupRing(Number.parseInt(target.value, 10));
-    render();
+    if (await setupRing(Number.parseInt(target.value, 10))) render();
   });
 
   const signerSelect = document.querySelector<HTMLSelectElement>('#signer-select');
   signerSelect?.addEventListener('change', (event) => {
     const target = event.target as HTMLSelectElement;
     state.signerIndex = Number.parseInt(target.value, 10);
+    // A completed Exhibit 1 signature remains a truthful historical result,
+    // but an in-flight one and Exhibit 2's current readout are bound to the old
+    // signer choice.
+    if (state.ex1Busy) retractExhibit1Verdict();
+    if (state.ex2Busy || state.ex2Result) retireExhibit2Evidence();
     render();
   });
 
@@ -1008,7 +1148,7 @@ const render = (): void => {
     // standing over a message they were never computed from — and the tamper
     // buttons would then reject on the message-binding check while claiming the
     // chain had failed to close. Retract instead.
-    if (state.ex1Signature && state.ex1Signature.message !== target.value) {
+    if (state.ex1Busy || (state.ex1Signature && state.ex1Signature.message !== target.value)) {
       retractExhibit1Verdict();
       // render() replaces #app wholesale, so hand typing back to the user: this
       // fires at most once per signature (the state is null afterwards).
@@ -1055,18 +1195,38 @@ const render = (): void => {
   ex2MessageA?.addEventListener('input', (event) => {
     const target = event.target as HTMLInputElement;
     state.ex2MessageA = target.value;
+    if (state.ex2Busy || state.ex2Result) {
+      const caret = target.selectionStart;
+      retireExhibit2Evidence();
+      render();
+      const reborn = document.querySelector<HTMLInputElement>('#ex2-message-a');
+      reborn?.focus();
+      if (reborn && caret !== null) reborn.setSelectionRange(caret, caret);
+    }
   });
 
   const ex2MessageB = document.querySelector<HTMLInputElement>('#ex2-message-b');
   ex2MessageB?.addEventListener('input', (event) => {
     const target = event.target as HTMLInputElement;
     state.ex2MessageB = target.value;
+    if (state.ex2Busy || state.ex2Result) {
+      const caret = target.selectionStart;
+      retireExhibit2Evidence();
+      render();
+      const reborn = document.querySelector<HTMLInputElement>('#ex2-message-b');
+      reborn?.focus();
+      if (reborn && caret !== null) reborn.setSelectionRange(caret, caret);
+    }
   });
 
   const ex2SignerB = document.querySelector<HTMLSelectElement>('#ex2-signer-b');
   ex2SignerB?.addEventListener('change', (event) => {
     const target = event.target as HTMLSelectElement;
     state.ex2SignerIndexB = Number.parseInt(target.value, 10);
+    if (state.ex2Busy || state.ex2Result) {
+      retireExhibit2Evidence();
+      render();
+    }
   });
 
   const ex2Run = document.querySelector<HTMLButtonElement>('#ex2-run');
@@ -1103,12 +1263,24 @@ const render = (): void => {
   groupMember?.addEventListener('change', (event) => {
     const target = event.target as HTMLSelectElement;
     state.group.selected = Number.parseInt(target.value, 10);
+    if (state.groupBusy || state.group.latestSignature || state.group.linkage) {
+      retireGroupEvidence();
+      render();
+    }
   });
 
   const groupMessage = document.querySelector<HTMLInputElement>('#group-message');
   groupMessage?.addEventListener('input', (event) => {
     const target = event.target as HTMLInputElement;
     state.groupMessage = target.value;
+    if (state.groupBusy || state.group.latestSignature || state.group.linkage) {
+      const caret = target.selectionStart;
+      retireGroupEvidence();
+      render();
+      const reborn = document.querySelector<HTMLInputElement>('#group-message');
+      reborn?.focus();
+      if (reborn && caret !== null) reborn.setSelectionRange(caret, caret);
+    }
   });
 
   const groupSignBtn = document.querySelector<HTMLButtonElement>('#group-sign');

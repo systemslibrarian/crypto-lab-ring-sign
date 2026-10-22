@@ -16,7 +16,13 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'chromium',
+      name: 'a11y',
+      testMatch: /a11y\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'claims',
+      testMatch: /claims\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
     },
   ],
