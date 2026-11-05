@@ -21,7 +21,19 @@ test('only the deploy job can mint Pages credentials', () => {
 });
 
 test('every third-party action is pinned to an immutable commit', () => {
-  const actions = [...workflow.matchAll(/^\s*-\s+uses:\s+([^@\s]+)@([^\s]+)/gm)];
+  // Both step shapes, because workflows here use both: `- uses: x@sha`, and a
+  // step that opens with `- id:` or `- name:` carrying `uses:` on its own line.
+  // Anchored on `- uses:` alone this control could not see the deploy step at
+  // all -- the one action that publishes the site -- so unpinning
+  // actions/deploy-pages back to @v5 left every control green. Measured.
+  const actions = [...workflow.matchAll(/^[ \t]*(?:-[ \t]+)?uses:[ \t]+([^@\s]+)@([^\s]+)/gm)];
+  // A declared denominator. Every `uses:` line present must be a `uses:` line
+  // parsed, so a step in a shape this pattern cannot read fails here instead
+  // of passing unseen -- which is how the hole above stayed quiet.
+  const present = workflow.match(/^[ \t]*(?:-[ \t]+)?uses:/gm) ?? [];
+  assert.equal(actions.length, present.length,
+    `${present.length - actions.length} uses: line(s) this control cannot read`);
+
   assert.ok(actions.length > 0, 'workflow has no actions');
   for (const [, action, reference] of actions) {
     assert.match(reference, /^[0-9a-f]{40}$/, `${action} is not commit-pinned`);
