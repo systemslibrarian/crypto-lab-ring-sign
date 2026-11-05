@@ -8,8 +8,8 @@ const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 
 const hexToBytes = (hex: string): Uint8Array => {
-  if (hex.length % 2 !== 0) {
-    throw new Error('hex length must be even');
+  if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) {
+    throw new Error('hex must be non-empty, even-length, and contain only hexadecimal digits');
   }
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i += 1) {
@@ -60,13 +60,36 @@ const mod = (x: bigint): bigint => {
   return r >= 0n ? r : r + CURVE_ORDER;
 };
 
+const multiplyPoint = (point: typeof BASE, scalar: bigint): typeof BASE =>
+  scalar === 0n ? ed25519.Point.ZERO : point.multiply(scalar);
+
 const scalarToHex = (x: bigint): string => x.toString(16).padStart(64, '0');
-const hexToScalar = (hex: string): bigint => mod(BigInt(`0x${hex}`));
+
+// Wire scalars have one canonical encoding: 32 lowercase hex bytes whose value
+// is already below the group order. Reducing attacker-controlled input modulo L
+// accepts many byte strings for the same signature and makes signatures
+// malleable (for example c0 + L verified as c0).
+const hexToScalar = (hex: string): bigint => {
+  if (!/^[0-9a-f]{64}$/.test(hex)) {
+    throw new Error('scalar must be exactly 32 lowercase hexadecimal bytes');
+  }
+  const scalar = BigInt(`0x${hex}`);
+  if (scalar >= CURVE_ORDER) {
+    throw new Error('scalar must be canonically smaller than the curve order');
+  }
+  return scalar;
+};
 
 const randomScalar = (): bigint => {
-  const raw = new Uint8Array(48);
-  crypto.getRandomValues(raw);
-  return mod(BigInt(`0x${bytesToHex(raw)}`));
+  // Zero would make an LSAG nonce reveal the signer scalar through
+  // s = alpha - c*x. Its probability is tiny, but the invariant is cheap to
+  // enforce and belongs at the sampling boundary.
+  while (true) {
+    const raw = new Uint8Array(48);
+    crypto.getRandomValues(raw);
+    const scalar = mod(BigInt(`0x${bytesToHex(raw)}`));
+    if (scalar !== 0n) return scalar;
+  }
 };
 
 const utf8 = (input: string): Uint8Array => TEXT_ENCODER.encode(input);
@@ -100,7 +123,23 @@ const seedToSecretScalarHex = (seedBytes: Uint8Array): string => {
   return scalarToHex(mod(ext.scalar));
 };
 
-const pointFromHex = (hex: string) => ed25519.Point.fromHex(hex);
+const pointFromHex = (hex: string): typeof BASE => {
+  if (!/^[0-9a-f]{64}$/.test(hex)) {
+    throw new Error('point must be exactly 32 lowercase hexadecimal bytes');
+  }
+  const point = ed25519.Point.fromHex(hex);
+  if (bytesToHex(point.toBytes()) !== hex) {
+    throw new Error('point encoding is not canonical');
+  }
+  return point;
+};
+
+const rejectDuplicatePoints = (points: (typeof BASE)[]): void => {
+  const encodings = points.map((point) => bytesToHex(point.toBytes()));
+  if (new Set(encodings).size !== encodings.length) {
+    throw new Error('Ring public keys must be distinct');
+  }
+};
 
 const hashToScalar = async (...chunks: Uint8Array[]): Promise<bigint> => {
   const data = concatBytes(...chunks);
@@ -224,24 +263,28 @@ export const signLsag = async (
 
   const n = members.length;
   const pubPoints = members.map((m) => pointFromHex(m.publicKeyHex));
+  rejectDuplicatePoints(pubPoints);
   const ringBytes = encodeRing(pubPoints);
   const hpPoints = pubPoints.map((p) => hashPoint(p));
   const secret = hexToScalar(members[signerIndex].secretScalarHex);
+  if (secret === 0n) {
+    throw new Error('Signer scalar must be non-zero');
+  }
   const keyImage = keyImageFromSecret(secret, pubPoints[signerIndex]);
 
   const c = new Array<bigint>(n).fill(0n);
   const s = new Array<bigint>(n).fill(0n);
 
   const alpha = randomScalar();
-  const lSigner = BASE.multiply(alpha);
-  const rSigner = hpPoints[signerIndex].multiply(alpha);
+  const lSigner = multiplyPoint(BASE, alpha);
+  const rSigner = multiplyPoint(hpPoints[signerIndex], alpha);
   c[(signerIndex + 1) % n] = await challengeFor(ringBytes, message, keyImage, lSigner, rSigner);
 
   let i = (signerIndex + 1) % n;
   while (i !== signerIndex) {
     s[i] = randomScalar();
-    const l = BASE.multiply(s[i]).add(pubPoints[i].multiply(c[i]));
-    const r = hpPoints[i].multiply(s[i]).add(keyImage.multiply(c[i]));
+    const l = multiplyPoint(BASE, s[i]).add(multiplyPoint(pubPoints[i], c[i]));
+    const r = multiplyPoint(hpPoints[i], s[i]).add(multiplyPoint(keyImage, c[i]));
     c[(i + 1) % n] = await challengeFor(ringBytes, message, keyImage, l, r);
     i = (i + 1) % n;
   }
@@ -259,37 +302,44 @@ export const signLsag = async (
 };
 
 export const verifyLsag = async (message: string, signature: LsagSignature): Promise<boolean> => {
-  normalizeRingSize(signature.ring.length);
-  if (signature.responsesHex.length !== signature.ring.length) {
-    return false;
-  }
-  if (signature.message !== message) {
-    return false;
-  }
+  // Verification is a trust boundary. Malformed wire data is an ordinary
+  // invalid signature, not an exception callers must remember to catch.
+  try {
+    normalizeRingSize(signature.ring.length);
+    if (signature.responsesHex.length !== signature.ring.length) {
+      return false;
+    }
+    if (signature.message !== message) {
+      return false;
+    }
 
-  const keyImage = pointFromHex(signature.keyImageHex);
-  if (keyImage.equals(ed25519.Point.ZERO)) {
-    return false;
-  }
-  if (keyImage.isSmallOrder() || !keyImage.isTorsionFree()) {
-    return false;
-  }
-  const c0 = hexToScalar(signature.c0Hex);
-  const pubPoints = signature.ring.map((m) => pointFromHex(m.publicKeyHex));
-  if (pubPoints.some((p) => p.isSmallOrder() || !p.isTorsionFree())) {
-    return false;
-  }
-  const ringBytes = encodeRing(pubPoints);
-  const hpPoints = pubPoints.map((p) => hashPoint(p));
+    const keyImage = pointFromHex(signature.keyImageHex);
+    if (keyImage.equals(ed25519.Point.ZERO)) {
+      return false;
+    }
+    if (keyImage.isSmallOrder() || !keyImage.isTorsionFree()) {
+      return false;
+    }
+    const c0 = hexToScalar(signature.c0Hex);
+    const pubPoints = signature.ring.map((m) => pointFromHex(m.publicKeyHex));
+    rejectDuplicatePoints(pubPoints);
+    if (pubPoints.some((p) => p.isSmallOrder() || !p.isTorsionFree())) {
+      return false;
+    }
+    const ringBytes = encodeRing(pubPoints);
+    const hpPoints = pubPoints.map((p) => hashPoint(p));
 
-  let c = c0;
-  for (let i = 0; i < pubPoints.length; i += 1) {
-    const s = hexToScalar(signature.responsesHex[i]);
-    const l = BASE.multiply(s).add(pubPoints[i].multiply(c));
-    const r = hpPoints[i].multiply(s).add(keyImage.multiply(c));
-    c = await challengeFor(ringBytes, message, keyImage, l, r);
+    let c = c0;
+    for (let i = 0; i < pubPoints.length; i += 1) {
+      const s = hexToScalar(signature.responsesHex[i]);
+      const l = multiplyPoint(BASE, s).add(multiplyPoint(pubPoints[i], c));
+      const r = multiplyPoint(hpPoints[i], s).add(multiplyPoint(keyImage, c));
+      c = await challengeFor(ringBytes, message, keyImage, l, r);
+    }
+    return c === c0;
+  } catch {
+    return false;
   }
-  return c === c0;
 };
 
 export const reconstructChallengeChain = async (
@@ -305,23 +355,22 @@ export const reconstructChallengeChain = async (
   chain.push(scalarToHex(c));
   for (let i = 0; i < pubPoints.length; i += 1) {
     const s = hexToScalar(signature.responsesHex[i]);
-    const l = BASE.multiply(s).add(pubPoints[i].multiply(c));
-    const r = hpPoints[i].multiply(s).add(keyImage.multiply(c));
+    const l = multiplyPoint(BASE, s).add(multiplyPoint(pubPoints[i], c));
+    const r = multiplyPoint(hpPoints[i], s).add(multiplyPoint(keyImage, c));
     c = await challengeFor(ringBytes, message, keyImage, l, r);
     chain.push(scalarToHex(c));
   }
   return chain;
 };
 
-// Flip a single hex nibble so the value provably changes (never returns the input).
-const flipNibble = (hex: string, index = 0): string => {
-  if (hex.length === 0) {
-    return hex;
-  }
-  const i = Math.min(index, hex.length - 1);
-  const current = Number.parseInt(hex[i], 16);
-  const next = ((current + 1) % 16).toString(16);
-  return hex.slice(0, i) + next + hex.slice(i + 1);
+// Change a scalar while keeping its wire encoding canonical. Flipping the most
+// significant nibble can push a valid scalar above the curve order; the strict
+// verifier then correctly rejects before reconstructing the chain, which makes
+// the teaching animation preserve the old clean chain. Moving by one inside
+// [0, L) guarantees both a changed signature and a recomputable broken chain.
+const changeCanonicalScalar = (hex: string): string => {
+  const scalar = hexToScalar(hex);
+  return scalarToHex(scalar === 0n ? 1n : scalar - 1n);
 };
 
 export type TamperField = 'response' | 'c0';
@@ -339,9 +388,9 @@ export const tamperLsagSignature = (
     responsesHex: [...signature.responsesHex]
   };
   if (field === 'response') {
-    clone.responsesHex[0] = flipNibble(clone.responsesHex[0]);
+    clone.responsesHex[0] = changeCanonicalScalar(clone.responsesHex[0]);
   } else {
-    clone.c0Hex = flipNibble(clone.c0Hex);
+    clone.c0Hex = changeCanonicalScalar(clone.c0Hex);
   }
   return clone;
 };

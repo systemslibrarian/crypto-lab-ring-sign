@@ -9,8 +9,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages-${{ github.ref }}
@@ -19,20 +17,35 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          node-version: 22
-      - run: npm install
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
       - run: npx tsc --noEmit
-      - run: npm test --if-present
+      - run: npm test
+      - name: Stamp the artifact with its exact source revision
+        run: |
+          mkdir -p public
+          printf '{"source_sha":"%s","repository":"%s"}\n' "$GITHUB_SHA" "$GITHUB_REPOSITORY" > public/deployment.json
       - run: npm run build
+      # ubuntu-latest already supplies Chromium's shared libraries. Installing
+      # them again with apt has wedged fleet jobs, so never use --with-deps.
       - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
       - name: Accessibility gate (axe-core, WCAG A/AA)
         run: npm run test:a11y
-      - uses: actions/upload-pages-artifact@v5
+      - name: Claims suite (does the page tell the truth)
+        run: npm run test:claims
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        if: github.event_name != 'pull_request'
         with:
           path: dist
 
@@ -40,38 +53,50 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/deploy-pages@v5
+      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
         id: deployment
+      - name: Verify served Pages bytes match the deployed revision
+        env:
+          LIVE_URL: https://systemslibrarian.github.io/crypto-lab-ring-sign/
+        run: |
+          set -eu
+          for attempt in $(seq 1 18); do
+            result=$(curl -fsSL --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "${LIVE_URL}deployment.json?sha=${GITHUB_SHA}" 2>/dev/null || true)
+            if node -e 'try { const p=JSON.parse(process.argv[1]);process.exit(p.source_sha===process.argv[2]&&p.repository===process.argv[3]?0:1) } catch { process.exit(1) }' "$result" "$GITHUB_SHA" "$GITHUB_REPOSITORY"; then
+              html=$(curl -fsSL --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "${LIVE_URL}?sha=${GITHUB_SHA}" 2>/dev/null || true)
+              if printf '%s' "$html" | grep -Fq 'id="app"'; then
+                echo "Verified live HTML and source revision $GITHUB_SHA at $LIVE_URL"
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          echo "::error::Live Pages failed source-SHA/HTML verification"
+          exit 1
 
-  # Dependabot only. Runs after the gate above, so a bump can only merge itself
-  # if this lab's own tests, build and axe/e2e run went green on the PR.
-  # Majors are deliberately excluded -- the 2026-08-18 batch had to hold back 109
-  # bumps and they were overwhelmingly majors (@noble v2 dropped export subpaths,
-  # TypeScript 7, vitest 4), so those still want a human.
+  # Dependabot only. The complete gate above decides whether a bump is safe;
+  # this job then merges and explicitly dispatches the main deployment.
   dependabot-auto-merge:
     needs: build
     if: github.event_name == 'pull_request' && github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: write
-      actions: write   # required by the deploy dispatch; without it gh workflow run 403s
+      actions: write
     steps:
-      - id: meta
-        uses: dependabot/fetch-metadata@v3
-      # Majors included on purpose. `needs:` above already required the whole
-      # gate to pass, and that gate -- unit tests, build, axe WCAG and the e2e
-      # claims -- judges a bump far better than its version number does. A major
-      # that actually breaks this lab fails the gate and stays open for a human.
       - name: Merge any bump whose gate went green
-        # Retry: a sibling PR merging first moves main underneath us and GitHub
-        # rejects with "Base branch was modified". That is benign, so try again
-        # rather than failing the run over a race.
         run: |
+          set -eu
           merged=""
           for attempt in 1 2 3; do
             if gh pr merge --squash --delete-branch "$PR_URL"; then
@@ -82,17 +107,10 @@ jobs:
             sleep 15
           done
           if [ -z "$merged" ]; then
-            echo "::warning::gate passed but the merge did not land after 3 attempts;"
-            echo "::warning::leaving this PR open - Dependabot will rebase and retry."
-            exit 0
+            echo "::error::gate passed but the merge did not land after 3 attempts; the bump is unmerged and no deploy was dispatched"
+            exit 1
           fi
-          # A merge made with GITHUB_TOKEN raises no push event -- GitHub suppresses
-          # them so workflows cannot retrigger themselves -- so deploy would never run
-          # and the site would keep serving the previous build. Ask for it explicitly;
-          # a workflow_dispatch through the API is not suppressed. The dispatched run
-          # is the same gate-then-deploy pipeline, so a bad merge still ships nothing.
-          gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main \
-            || echo "::warning::deploy dispatch failed; run pages.yml by hand"
+          gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

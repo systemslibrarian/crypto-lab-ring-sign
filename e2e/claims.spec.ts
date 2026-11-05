@@ -382,6 +382,25 @@ test('editing the message retracts the verdict', async ({ page }) => {
   await expect(line(page, 1, 0)).toHaveText('Verification: valid ring signature');
 });
 
+test('editing during the challenge walk cancels every late continuation', async ({ page }) => {
+  await page.locator('#ex1-run').click();
+  await expect(page.locator('#ex1-run')).toBeDisabled();
+  // The proof has completed but its deliberate edge-by-edge animation is still
+  // running. This is the window in which an old continuation used to repaint a
+  // valid verdict after the learner had changed the message.
+  await expect(page.locator('.chain-wrap .chain')).toHaveCount(6);
+  await page.locator('#ex1-message').fill('changed while the old proof was walking');
+
+  await expect(page.locator('#ex1-run')).toBeEnabled();
+  await expect(line(page, 1, 0)).toHaveText('Verification: no signature yet');
+  await page.waitForTimeout(2_200);
+
+  await expect(line(page, 1, 0)).toHaveText('Verification: no signature yet');
+  await expect(page.locator('.chain-badge')).toHaveCount(0);
+  await expect(page.locator('.chain-wrap .chain')).toHaveCount(0);
+  await expect(page.locator('.response-chip')).toHaveCount(0);
+});
+
 test('the ledger rejects the repeat key image and accepts distinct ones', async ({ page }) => {
   // Default: spend B is signed by the same member as spend A.
   await page.locator('#ex2-run').click();
@@ -431,6 +450,22 @@ test('the ledger rejects the repeat key image and accepts distinct ones', async 
   await expect(page.locator('.ledger-reject')).toHaveCount(0);
   await expect(page.locator('.ledger-ok')).toHaveCount(2);
   await expect(page.locator('.ledger-note')).toContainText('Every submission was accepted');
+});
+
+test('ledger messages are inert text, and a new ring retires the old ledger', async ({ page }) => {
+  const payload = `<img src=x onerror="document.body.dataset.xss='executed'">`;
+  await page.locator('#ex2-message-a').fill(payload);
+  await page.locator('#ex2-run').click();
+  await expect(page.locator('.ledger-row')).toHaveCount(2);
+
+  await expect(page.locator('.ledger-msg').first()).toHaveText(payload);
+  await expect(page.locator('.ledger img')).toHaveCount(0);
+  await expect(page.locator('body')).not.toHaveAttribute('data-xss', 'executed');
+
+  await setRingSize(page, 4);
+  await expect(page.locator('.ledger-row')).toHaveCount(0);
+  await expect(page.locator('#ex2-reset')).toBeDisabled();
+  await expect(line(page, 2, 0)).toHaveText('Key image A: pending');
 });
 
 test('the timing sweep charts exactly the samples it claims to have fitted', async ({ page }) => {
@@ -527,4 +562,28 @@ test('the group readout counts the signatures it was actually given, and only th
   // the ring deliberately lacks.
   await page.locator('#group-open').click();
   await expect(line(page, 4, 2)).toHaveText(`Manager open result: ${members[2]}`);
+});
+
+test('changing a group-signature subject retires the current evidence but preserves history', async ({
+  page,
+}) => {
+  await page.locator('#group-sign').click();
+  await expect(line(page, 4, 0)).toHaveText(
+    'Verifier result: valid group credential + member signature',
+  );
+  await page.locator('#group-open').click();
+  await expect(line(page, 4, 2)).not.toHaveText('Manager open result: not opened yet');
+
+  await page.locator('#group-member').selectOption('1');
+  await expect(line(page, 4, 0)).toHaveText('Verifier result: no signature yet');
+  await expect(line(page, 4, 1)).toHaveText('Signer identity to verifier: no signature yet');
+  await expect(line(page, 4, 2)).toHaveText('Manager open result: not opened yet');
+  await expect(page.locator('#group-open')).toBeDisabled();
+
+  await page.locator('#group-sign').click();
+  await expect(line(page, 4, 1)).toContainText('Signatures collected in this session: 2');
+  await page.locator('#group-message').fill('a different settlement');
+  await expect(line(page, 4, 0)).toHaveText('Verifier result: no signature yet');
+  await expect(line(page, 4, 1)).toHaveText('Signer identity to verifier: no signature yet');
+  await expect(page.locator('#group-open')).toBeDisabled();
 });

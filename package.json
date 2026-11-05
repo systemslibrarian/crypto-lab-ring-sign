@@ -5,11 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run test:publish-request && tsc && vite build",
+    "build": "npm run test:maintenance && npm run test:publish-request && tsc --noEmit && vite build",
     "preview": "vite preview",
     "deploy": "gh workflow run pages.yml --repo systemslibrarian/crypto-lab-ring-sign --ref main",
     "test": "vitest run",
-    "test:a11y": "playwright test",
+    "test:a11y": "playwright test --project=a11y",
+    "test:claims": "playwright test --project=claims",
+    "test:e2e:all": "playwright test",
+    "test:maintenance": "node --test tests/maintenance-controls.node.mjs",
     "test:publish-request": "node --test tests/publish-request.node.mjs"
   },
   "devDependencies": {

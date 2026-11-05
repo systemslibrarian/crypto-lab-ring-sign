@@ -89,6 +89,23 @@ describe('P-256 manager-issued group signatures', () => {
     await expect(verifyGroupSignature(manager.managerPublicJwk, forged)).resolves.toBe(false);
   });
 
+  it('returns false rather than throwing for malformed wire encodings', async () => {
+    const manager = await createGroupManager();
+    const cred = await issueCredential(manager, 'wire-boundary');
+    const sig = await groupSign('m', cred);
+    const malformed: GroupSignature[] = [
+      { ...sig, managerSignatureHex: 'zz' },
+      { ...sig, memberSignatureHex: '0' },
+      { ...sig, nonceHex: 'not-a-nonce' },
+      { ...sig, credentialId: 'ABCDEFABCDEFABCDEFABCDEF' },
+      { ...sig, issuedPayload: '{not-json' },
+      { ...sig, memberPublicJwk: {} }
+    ];
+    for (const candidate of malformed) {
+      await expect(verifyGroupSignature(manager.managerPublicJwk, candidate)).resolves.toBe(false);
+    }
+  });
+
   it('summary distinguishes ring (no manager) vs group (manager opens)', () => {
     const s = isRingVsGroupSummary();
     expect(s).toMatch(/ambiguity/i);
