@@ -587,3 +587,30 @@ test('changing a group-signature subject retires the current evidence but preser
   await expect(line(page, 4, 1)).toHaveText('Signer identity to verifier: no signature yet');
   await expect(page.locator('#group-open')).toBeDisabled();
 });
+
+test('a quoted message cannot break out of the input it is rendered back into', async ({ page }) => {
+  // `render()` rewrites #app wholesale and writes the current message into
+  // `value="..."`, so a message containing a double quote would close the
+  // attribute — CodeQL js/xss-through-dom at src/main.ts, whose source is the
+  // input's own DOM text.
+  //
+  // Typing alone does NOT re-render: the handler only calls render() once a
+  // signature exists and the message has changed under it. So the payload has
+  // to be typed AFTER signing, or this never reaches the sink — measured, not
+  // assumed.
+  await page.goto('.');
+  await signAndWait(page);
+
+  const payload = `" onfocus="document.body.dataset.xss='executed'" data-injected="yes`;
+  await page.locator('#ex1-message').fill(payload);
+
+  // The re-render really happened, so the assertions below are about the sink
+  // rather than a stale DOM: the retraction clears the chain badge.
+  await expect(page.locator('.chain-badge')).toHaveCount(0);
+
+  await expect(page.locator('[data-injected]')).toHaveCount(0);
+  await expect(page.locator('body')).not.toHaveAttribute('data-xss', 'executed');
+  // And the value survives whole, which is what distinguishes escaping from
+  // dropping the input.
+  await expect(page.locator('#ex1-message')).toHaveValue(payload);
+});
