@@ -97,18 +97,20 @@ jobs:
       - id: bump
         name: Read the bump type from the pull request itself
         env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         # No third-party action in the merge path: the versions come from the pull
-        # request's own text, read with gh and judged by an in-repo script that
-        # answers major / non-major / unknown. Only non-major merges; unknown waits
-        # for a person, which is what a grouped pull request with no versions, a
-        # retitled one, or a missing body all come to.
+        # request's own text, which arrives with the triggering event -- no API
+        # reads that could fail, in a job that also owns the deploy dispatch -- and
+        # is judged by an in-repo script that answers major / non-major / unknown.
+        # Only non-major merges; unknown waits for a person, which is what a
+        # grouped pull request with no versions, a retitled one, or an empty body
+        # all come to. The title and body are attacker-controlled, so they reach
+        # the script only through the env block above: an expression interpolated
+        # into a run: block is substituted before bash reads the line, so a
+        # crafted title would become shell source.
         run: |
           set -eu
-          PR_TITLE="$(gh pr view "$PR_URL" --json title --jq .title)"
-          PR_BODY="$(gh pr view "$PR_URL" --json body --jq .body)"
-          export PR_TITLE PR_BODY
           node .github/scripts/bump-type.mjs | tee -a "$GITHUB_OUTPUT"
       - name: Merge any bump whose gate went green
         if: steps.bump.outputs.bump == 'non-major'
