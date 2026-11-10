@@ -83,3 +83,25 @@ test('the production build enforces these maintenance controls', () => {
   assert.equal(packageJson.scripts['test:maintenance'], 'node --test tests/maintenance-controls.node.mjs');
   assert.match(packageJson.scripts.build, /npm run test:maintenance/);
 });
+
+test('the auto-merge path reads the bump type from the pull request and fails closed', async () => {
+  // This repository keeps no third-party action in the merge path, so the bump
+  // type is derived from the pull request's own text by an in-repo script and
+  // the merge step is gated on its answer.
+  const autoMerge = job('dependabot-auto-merge');
+  assert.match(autoMerge, /\.github\/scripts\/bump-type\.mjs/,
+    'the job must read the bump type from the in-repo script');
+  assert.match(autoMerge, /if:\s*steps\.bump\.outputs\.bump\s*==\s*'non-major'/,
+    'the merge step must run only for a non-major bump');
+  const { bumpType } = await import('../.github/scripts/bump-type.mjs');
+  // Fails closed, which is the property that matters: anything it cannot read
+  // is 'unknown', and 'unknown' does not merge.
+  assert.equal(bumpType({ title: 'Bump the npm group across 1 directory', body: 'no versions here' }), 'unknown');
+  assert.equal(bumpType({ title: 'a retitled pull request', body: 'prose only' }), 'unknown');
+  assert.equal(bumpType({ title: 'Bump x from 1.2.3 to 2.0.0', body: undefined }), 'unknown', 'a missing body must not merge');
+  assert.equal(bumpType({ title: 'Bump x from one to two', body: 'b' }), 'unknown');
+  // And it still answers the two readable cases.
+  assert.equal(bumpType({ title: 'Bump vitest from 5.0.5 to 5.1.0', body: 'b' }), 'non-major');
+  assert.equal(bumpType({ title: 'Bump next from 15.5.27 to 16.4.2', body: 'b' }), 'major');
+  assert.equal(bumpType({ title: 'Bump zod from 0.4.1 to 0.5.0', body: 'b' }), 'major', '0.x minor is breaking');
+});
