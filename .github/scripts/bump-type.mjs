@@ -1,6 +1,8 @@
 /* Decide whether a Dependabot pull request is a semver-major bump, reading only
- * the pull request's own text. No third-party action enters the merge path: the
- * caller gets the title and body from `gh pr view --json title,body`.
+ * the pull request's own text. No third-party action enters the merge path, and
+ * no API call either: the caller takes the title and body from the triggering
+ * event's own payload and passes them in through env, so there is no read that
+ * can fail, and the attacker-controlled text never reaches a shell as source.
  *
  * Three answers, and only one of them permits an auto-merge:
  *
