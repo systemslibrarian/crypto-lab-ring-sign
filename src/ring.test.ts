@@ -29,6 +29,44 @@ const pointFromHex = (hex: string) => ed25519.Point.fromHex(hex);
 const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 
+// Mirror the module's ring encoding and challenge hash as well, so a test can
+// state the LSAG challenge formula in full rather than in prose. `keyImage: null`
+// models the formula the page and these comments used to print, c = H(L, m, L_i,
+// R_i), with the linkability tag left out.
+const encodeRing = (points: (typeof BASE)[]): Uint8Array => {
+  const out = new Uint8Array(2 + points.length * 32);
+  out[0] = (points.length >> 8) & 0xff;
+  out[1] = points.length & 0xff;
+  points.forEach((p, i) => out.set(p.toBytes(), 2 + i * 32));
+  return out;
+};
+
+const challengeFor = async (
+  ringBytes: Uint8Array,
+  message: string,
+  keyImage: typeof BASE | null,
+  lPoint: typeof BASE,
+  rPoint: typeof BASE
+): Promise<bigint> => {
+  const chunks = [
+    TEXT.encode('LSAG_CHALLENGE_V2'),
+    ringBytes,
+    TEXT.encode(message),
+    ...(keyImage ? [keyImage.toBytes()] : []),
+    lPoint.toBytes(),
+    rPoint.toBytes()
+  ];
+  const data = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    data.set(chunk, offset);
+    offset += chunk.length;
+  }
+  const digest = await crypto.subtle.digest('SHA-512', data);
+  const value = BigInt(`0x${toHex(new Uint8Array(digest))}`);
+  return value % ed25519.Point.Fn.ORDER;
+};
+
 describe('LSAG ring signature', () => {
   it(
     'signs and verifies for every ring size and every signer position',
@@ -124,10 +162,10 @@ describe('LSAG rejects forgeries and tampering', () => {
     await expect(verifyLsag('steal', forged)).resolves.toBe(false);
   });
 
-  // Liu-Wei-Wong LSAG computes c_{i+1} = H(L, m, L_i, R_i) where L is the LIST
-  // of ring public keys. The challenge hash now includes that list, so a
-  // signature is bound to the exact ring — same members, same order — it was
-  // produced for.
+  // Liu-Wei-Wong LSAG computes c_{i+1} = H(L, y~, m, L_i, R_i) where L is the
+  // LIST of ring public keys and y~ is the linkability tag (here the key image).
+  // The challenge hash includes that list, so a signature is bound to the exact
+  // ring — same members, same order — it was produced for.
   it('binds the signature to its ring: substituting a member fails verification', async () => {
     const members = await generateRingMembers(5);
     const strangers = await generateRingMembers(2);
@@ -151,6 +189,46 @@ describe('LSAG rejects forgeries and tampering', () => {
       ring: [sig.ring[1], sig.ring[0], ...sig.ring.slice(2)]
     };
     await expect(verifyLsag('order', reordered)).resolves.toBe(false);
+  });
+
+  // Pins what the explainer now says: the key image is one of the five hashed
+  // inputs, and each ring member costs FOUR scalar-multiplications (not two).
+  it('re-derives every chain link from H(L, I, m, L_i, R_i) at four scalar-multiplications per member', async () => {
+    const members = await generateRingMembers(4);
+    const sig = await signLsag('formula', members, 1);
+    const chain = await reconstructChallengeChain('formula', sig);
+    const pubPoints = sig.ring.map((m) => pointFromHex(m.publicKeyHex));
+    const ringBytes = encodeRing(pubPoints);
+    const keyImage = pointFromHex(sig.keyImageHex);
+
+    let scalarMultiplications = 0;
+    const mul = (point: typeof BASE, scalar: bigint): typeof BASE => {
+      scalarMultiplications += 1;
+      return scalar === 0n ? ed25519.Point.ZERO : point.multiply(scalar);
+    };
+
+    for (let i = 0; i < pubPoints.length; i += 1) {
+      const s = BigInt(`0x${sig.responsesHex[i]}`);
+      const c = BigInt(`0x${chain[i]}`);
+      // s_i·G, c_i·P_i, s_i·H_p(P_i), c_i·I — four per member.
+      const l = mul(BASE, s).add(mul(pubPoints[i], c));
+      const r = mul(hashPoint(pubPoints[i]), s).add(mul(keyImage, c));
+      expect(await challengeFor(ringBytes, 'formula', keyImage, l, r)).toBe(
+        BigInt(`0x${chain[i + 1]}`)
+      );
+    }
+    expect(scalarMultiplications).toBe(4 * pubPoints.length);
+    expect(chain[chain.length - 1]).toBe(chain[0]);
+
+    // Leave the key image out of the hash and the same points no longer
+    // reproduce the chain, so the formula cannot be stated without it.
+    const s0 = BigInt(`0x${sig.responsesHex[0]}`);
+    const c0 = BigInt(`0x${chain[0]}`);
+    const l0 = BASE.multiply(s0).add(pubPoints[0].multiply(c0));
+    const r0 = hashPoint(pubPoints[0]).multiply(s0).add(keyImage.multiply(c0));
+    expect(await challengeFor(ringBytes, 'formula', null, l0, r0)).not.toBe(
+      BigInt(`0x${chain[1]}`)
+    );
   });
 });
 

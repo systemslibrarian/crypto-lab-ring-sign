@@ -153,7 +153,9 @@ const HASH_TO_POINT_DST = 'crypto-lab-ring-sign:LSAG:H2P:v1';
 
 // Map a ring member's public key to an independent curve point H_p(P) whose
 // discrete log to the base point is UNKNOWN. This is the security-critical part
-// of LSAG: the key image I = x·H_p(P) must not be recomputable from public data.
+// of the key image: I = x·H_p(P) must not be recomputable from public data.
+// (The per-key image is CryptoNote's form -- van Saberhagen, CryptoNote v2.0,
+// 17 October 2013, section 4.4 -- not LSAG's ring-wide tag H_2(L)^x.)
 //
 // A previous version computed H_p(P) = G·SHA512(P), i.e. H_p(P) = h·G with a
 // publicly known scalar h. That let ANYONE deanonymize the signer by testing
@@ -182,8 +184,11 @@ const encodeRing = (pubPoints: (typeof BASE)[]): Uint8Array => {
   return concatBytes(header, ...pubPoints.map((p) => p.toBytes()));
 };
 
-// Liu-Wei-Wong LSAG challenge: c_{i+1} = H(L, m, L_i, R_i), where L is the LIST
-// OF RING PUBLIC KEYS. Hashing L is not decoration — it is what binds a
+// Liu-Wei-Wong LSAG challenge: c_{i+1} = H(L, y~, m, L_i, R_i), where L is the
+// LIST OF RING PUBLIC KEYS and y~ is the linkability tag -- here the key image
+// I, which this function hashes in as well.
+//
+// Hashing L is not decoration — it is what binds a
 // signature to the exact ring it was produced for, and the reduction in the
 // LWW security proof relies on it. Without L in the hash, a valid signature can
 // be replayed against a *different* ring that happens to reproduce the same
