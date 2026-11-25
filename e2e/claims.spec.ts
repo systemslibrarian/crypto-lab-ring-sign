@@ -581,7 +581,7 @@ test('changing a group-signature subject retires the current evidence but preser
   await expect(page.locator('#group-open')).toBeDisabled();
 
   await page.locator('#group-sign').click();
-  await expect(line(page, 4, 1)).toContainText('Signatures collected in this session: 2');
+  await expect(line(page, 4, 1)).toContainText('Verified signatures in this session: 2');
   await page.locator('#group-message').fill('a different settlement');
   await expect(line(page, 4, 0)).toHaveText('Verifier result: no signature yet');
   await expect(line(page, 4, 1)).toHaveText('Signer identity to verifier: no signature yet');
@@ -613,4 +613,33 @@ test('a quoted message cannot break out of the input it is rendered back into', 
   // And the value survives whole, which is what distinguishes escaping from
   // dropping the input.
   await expect(page.locator('#ex1-message')).toHaveValue(payload);
+});
+
+
+test('rejected credential and member checks withhold attribution and leave verified history intact', async ({ page }) => {
+  await page.goto('.');
+  const sign = page.locator('#group-sign');
+  const open = page.locator('#group-open');
+  await sign.click();
+  await expect(open).toBeEnabled();
+  await expect(line(page, 4, 1)).toContainText('Verified signatures in this session: 1');
+  for (const failAt of [1, 2]) {
+    await page.evaluate(failAt => {
+      const check = crypto.subtle.verify.bind(crypto.subtle);
+      let count = 0;
+      crypto.subtle.verify = (...args) => {
+        if (++count !== failAt) return check(...args);
+        crypto.subtle.verify = check;
+        return Promise.resolve(false);
+      };
+    }, failAt);
+    await sign.click();
+    await expect(line(page, 4, 0)).toContainText('rejected');
+    await expect(line(page, 4, 1)).toContainText('attribution withheld');
+    await expect(open).toBeDisabled();
+  }
+  await sign.click();
+  await expect(line(page, 4, 1)).toContainText('Verified signatures in this session: 2');
+  await open.click();
+  await expect(line(page, 4, 2)).toContainText('Member Alpha');
 });

@@ -22,7 +22,7 @@ describe('P-256 manager-issued group signatures', () => {
     const manager = await createGroupManager();
     const cred = await issueCredential(manager, 'employee-42');
     const sig = await groupSign('m', cred);
-    expect(openGroupSignature(manager, sig)).toBe('employee-42');
+    await expect(openGroupSignature(manager, sig)).resolves.toBe('employee-42');
   });
 
   it('rejects a forged member signature (wrong message / tampered body)', async () => {
@@ -31,6 +31,7 @@ describe('P-256 manager-issued group signatures', () => {
     const sig = await groupSign('approve-payment', cred);
     const tampered: GroupSignature = { ...sig, message: 'approve-BIGGER-payment' };
     await expect(verifyGroupSignature(manager.managerPublicJwk, tampered)).resolves.toBe(false);
+    await expect(openGroupSignature(manager, tampered)).resolves.toBeNull();
   });
 
   it('rejects a signature verified against a DIFFERENT manager public key', async () => {

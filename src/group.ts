@@ -198,8 +198,11 @@ export const verifyGroupSignature = async (
   }
 };
 
-export const openGroupSignature = (manager: GroupManager, signature: GroupSignature): string | null =>
-  manager.registry.get(signature.credentialId) ?? null;
+export const openGroupSignature = async (manager: GroupManager, signature: GroupSignature): Promise<string | null> => {
+  const candidate = structuredClone(signature);
+  if (!(await verifyGroupSignature(manager.managerPublicJwk, candidate))) return null;
+  return manager.registry.get(candidate.credentialId) ?? null;
+};
 
 /**
  * What a verifier actually learns about the signer, computed from the wire

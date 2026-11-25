@@ -489,10 +489,10 @@ const runExhibit4Sign = async (): Promise<void> => {
     if (generation !== groupGeneration) return;
     state.group.latestSignature = signature;
     state.group.verified = verified;
-    // Keep every completed signature a verifier has seen, so the readout can
-    // compute correlation rather than assert that it can correlate nothing.
-    state.group.history.push(signature);
-    state.group.linkage = linkageFromWire(signature, state.group.history);
+    if (verified) {
+      state.group.history.push(signature);
+      state.group.linkage = linkageFromWire(signature, state.group.history);
+    }
     state.groupBusy = false;
   } catch (error) {
     if (generation === groupGeneration) {
@@ -502,11 +502,14 @@ const runExhibit4Sign = async (): Promise<void> => {
   }
 };
 
-const runExhibit4Open = (): void => {
-  if (!state.group.manager || !state.group.latestSignature) {
-    return;
-  }
-  state.group.openedMember = openGroupSignature(state.group.manager, state.group.latestSignature);
+const runExhibit4Open = async (): Promise<void> => {
+  const { manager, latestSignature, verified } = state.group;
+  if (!manager || !latestSignature || !verified) return;
+  const generation = ++groupGeneration;
+  const member = await openGroupSignature(manager, latestSignature);
+  if (generation !== groupGeneration) return;
+  state.group.openedMember = member;
+  if (member === null) state.error = 'The manager could not confirm a verified registry match.';
 };
 
 const RING_RADIUS = 39;
@@ -730,6 +733,7 @@ const render = (): void => {
   const ex2 = state.ex2Result;
   const ex3Curve = state.ex3Curve;
   const group = state.group;
+  const groupBusyResult = state.groupBusy ? 'checking the current signature…' : '<span class="muted">no signature yet</span>';
   const compareLine = isRingVsGroupSummary();
 
   const ex3ChartHtml = scatterPlot(ex3Curve);
@@ -740,11 +744,11 @@ const render = (): void => {
         <div class="cl-hero-main">
           <h1 class="cl-hero-title">Ring Signatures</h1>
           <p class="cl-hero-sub">LSAG · key-image linkable · vs. group signatures</p>
-          <p class="cl-hero-desc">Sign a message as one of several ring members and watch the verifier confirm the signature closes without learning which member signed — then reuse a key to expose the linkable key image and contrast it with an openable group signature.</p>
+          <p class="cl-hero-desc">Sign a message as one of several ring members and watch the verifier confirm the signature closes without learning which member signed — then reuse a key to expose the linkable key image and compare it with a manager-issued credential that uses a stable pseudonym.</p>
         </div>
         <aside class="cl-hero-why" aria-label="Why it matters">
           <span class="cl-hero-why-label">WHY IT MATTERS</span>
-          <p class="cl-hero-why-text">Ring signatures give Monero-style spend privacy: membership is provable, the signer stays hidden. Key images stop double-spends without breaking anonymity, and group signatures show the opposite trade — anonymity a manager can revoke.</p>
+          <p class="cl-hero-why-text">Ring signatures give Monero-style spend privacy: membership is provable, the signer stays hidden. Key images stop double-spends without breaking anonymity, and the separate credential model shows who can link repeat signatures and who can look up the enrolled name.</p>
         </aside>
       </header>
 
@@ -1036,7 +1040,7 @@ const render = (): void => {
       <section class="panel" aria-labelledby="ex4-title">
         <div class="panel-head">
           <h2 id="ex4-title">Exhibit 4 — Group Signatures</h2>
-          <span class="badge" aria-hidden="true">Accountable anonymity</span>
+          <span class="badge" aria-hidden="true">Manager-issued pseudonyms</span>
         </div>
         <fieldset class="controls-row">
           <legend class="sr-only">Group signature controls</legend>
@@ -1048,25 +1052,25 @@ const render = (): void => {
           <label for="group-message">Message
             <input id="group-message" type="text" value="${escapeHtml(state.groupMessage)}" />
           </label>
-          <button id="group-sign" type="button" ${state.groupBusy ? 'disabled aria-busy="true"' : ''}>${state.groupBusy ? 'Signing…' : 'Anonymous Group Sign'}</button>
-          <button id="group-open" type="button" ${group.latestSignature && !state.groupBusy ? '' : 'disabled'} aria-describedby="open-desc">Manager Open Signature</button>
+          <button id="group-sign" type="button" ${state.groupBusy ? 'disabled aria-busy="true"' : ''}>${state.groupBusy ? 'Signing…' : 'Sign with member credential'}</button>
+          <button id="group-open" type="button" ${group.verified && !state.groupBusy ? '' : 'disabled'} aria-describedby="open-desc">Manager Open Signature</button>
           <span id="open-desc" class="sr-only">Reveals which group member produced the signature</span>
         </fieldset>
         <div class="info-grid" aria-live="polite" role="status">
-          <p><strong>Verifier result:</strong> ${group.verified ? '<span class="ok">valid group credential + member signature</span>' : '<span class="muted">no signature yet</span>'}</p>
+          <p><strong>Verifier result:</strong> ${group.verified ? '<span class="ok">valid group credential + member signature</span>' : group.latestSignature ? '<strong>rejected — credential or member signature failed verification</strong>' : groupBusyResult}</p>
           <p><strong>Signer identity to verifier:</strong> ${
             group.linkage
-              ? `real-world name hidden — the registry that maps credentials to people is the manager's. But the signature is <strong>pseudonymous, not anonymous</strong>: it carries credential <code>${escapeHtml(group.linkage.pseudonym)}</code> and the member's public key in the clear. Signatures collected in this session: ${group.history.length} across ${group.linkage.distinctSigners} distinct signer${group.linkage.distinctSigners === 1 ? '' : 's'}; <strong>${group.linkage.linkedCount}</strong> of them share this pseudonym${
+              ? `real-world name hidden — the registry that maps credentials to people is the manager's. But the signature is <strong>pseudonymous, not anonymous</strong>: it carries credential <code>${escapeHtml(group.linkage.pseudonym)}</code> and the member's public key in the clear. Verified signatures in this session: ${group.history.length} across ${group.linkage.distinctSigners} distinct signer${group.linkage.distinctSigners === 1 ? '' : 's'}; <strong>${group.linkage.linkedCount}</strong> of them share this pseudonym${
                   group.linkage.stableFields.length > 0
                     ? `, linked by the fields <code>${escapeHtml(group.linkage.stableFields.join(', '))}</code>, which were byte-identical across every one of them`
                     : ''
                 }. Any verifier can do that grouping; no manager needed.`
-              : 'no signature yet'
+              : group.latestSignature ? 'attribution withheld' : 'no signature yet'
           }</p>
           <p><strong>Manager open result:</strong> ${group.openedMember ? escapeHtml(group.openedMember) : 'not opened yet'}</p>
           <p><strong>Ring vs Group:</strong> ${compareLine}</p>
         </div>
-        <p class="note caveat"><strong>Teaching honesty:</strong> this exhibit sends each member's P-256 public key in the clear inside every signature, so two signatures from the same member are trivially linkable and only the credential-to-identity mapping is hidden. A production scheme (e.g. BBS+ / randomizable credentials) hides the member key itself, making even repeat signatures unlinkable to everyone but the manager. Read this as a model of the <em>accountability</em> property, not of full unlinkability.</p>
+        <p class="note caveat"><strong>Teaching honesty:</strong> this exhibit sends each member's P-256 public key in the clear inside every signature, so two signatures from the same member are trivially linkable and only the credential-to-identity mapping is hidden. The manager verifies both signatures before looking up the credential in its registry. The repeated public key makes signatures from the same credential linkable to every verifier.</p>
         ${explainer(
           'How accountable anonymity is built',
           `<p>The manager issues a <strong>credential</strong>: an ECDSA signature over the member's public key. To sign a message, the member signs it with their own key and attaches that credential. A verifier checks two things — the manager's signature proves "a manager admitted this key", and the member's signature proves "the holder of that key approved this message" — without learning the member's real-world identity.</p>
@@ -1298,8 +1302,9 @@ const render = (): void => {
   });
 
   const groupOpenBtn = document.querySelector<HTMLButtonElement>('#group-open');
-  groupOpenBtn?.addEventListener('click', () => {
-    runExhibit4Open();
+  groupOpenBtn?.addEventListener('click', async () => {
+    state.error = null;
+    await runExhibit4Open();
     render();
   });
 };

@@ -1,12 +1,12 @@
 # crypto-lab-ring-sign
 
 ## What It Is
-This demo compares two anonymous-authentication models: LSAG-style ring signatures and manager-issued group signatures. In the code, ring members are built from WebCrypto Ed25519 keys and verified with real Ed25519 curve arithmetic, while the group-signature exhibit uses P-256 ECDSA credentials issued by a manager. The problem being illustrated is how to prove membership in a set without publicly revealing which specific member acted. The security model differs by primitive: ring signatures provide signer ambiguity with linkability through key images, while the group flow adds manager-controlled opening for accountability.
+This demo compares LSAG-style ring signatures with a separate model of manager-issued pseudonymous credentials. In the code, ring members are built from WebCrypto Ed25519 keys and verified with real Ed25519 curve arithmetic, while the group-signature exhibit uses P-256 ECDSA credentials issued by a manager. The problem being illustrated is how to prove membership in a set without publicly revealing which specific member acted. The security model differs by primitive: ring signatures provide signer ambiguity with linkability through key images, while the credential model exposes a stable member pseudonym. The manager verifies both the credential and the member signature before looking up the enrolled name.
 
 ## When to Use It
 - Use it to explain ring signatures in privacy-preserving payments, because the LSAG flow shows how one valid signer is hidden among decoys while still producing a verifiable signature.
 - Use it to demonstrate key-image-based double-spend detection, because the same signer secret yields the same linkable key image across repeated spends.
-- Use it to compare anonymous authorization models, because the group-signature exhibit shows what changes when a manager can issue credentials and later open a signature.
+- Use it to compare signer ambiguity with linkable member credentials, because the group-signature exhibit shows what changes when a manager can issue credentials and later open a signature.
 - Use it to discuss anonymity-set tradeoffs, because the ring-size timing exhibit makes the privacy-versus-cost relationship visible with real measurements.
 - Do NOT use it as a production wallet or enterprise group-signature implementation, because the group exhibit is a teaching model built from manager-issued P-256 credentials rather than a standardized deployable group-signature scheme.
 
